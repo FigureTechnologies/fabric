@@ -1,14 +1,12 @@
 /*
+Copyright 2018 Figure Technoclogies Inc. All Rights Reserved.
+
+SPDX-License-Identifier: BSD-3-Clause-Attribution
+
+-------------------------------------------------------------------------------
 Copyright 2018 The Kubernetes Authors.
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+
+SPDX-License-Identifier: Apache 2.0
 */
 
 package kubernetescontroller
@@ -18,10 +16,12 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
+
+	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestFakeClient demonstrates how to use a fake client with SharedInformerFactory in tests.
@@ -33,12 +33,12 @@ func TestFakeClient(t *testing.T) {
 	client := fake.NewSimpleClientset()
 
 	// We will create an informer that writes added pods to a channel.
-	pods := make(chan *v1.Pod, 1)
+	pods := make(chan *apiv1.Pod, 1)
 	informers := informers.NewSharedInformerFactory(client, 0)
 	podInformer := informers.Core().V1().Pods().Informer()
 	podInformer.AddEventHandler(&cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			pod := obj.(*v1.Pod)
+			pod := obj.(*apiv1.Pod)
 			t.Logf("pod added: %s/%s", pod.Namespace, pod.Name)
 			pods <- pod
 			cancel()
@@ -56,7 +56,7 @@ func TestFakeClient(t *testing.T) {
 	}
 
 	// Inject an event into the fake client.
-	p := &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "my-pod"}}
+	p := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "my-pod"}}
 	_, err := client.Core().Pods("test-ns").Create(p)
 	if err != nil {
 		t.Errorf("error injecting pod add: %v", err)

@@ -81,7 +81,7 @@ type dockerClient interface {
 	RemoveContainer(opts docker.RemoveContainerOptions) error
 }
 
-// Controller implements container.VMProvider
+// Provider implements container.VMProvider
 type Provider struct {
 	PeerID    string
 	NetworkID string
@@ -98,12 +98,11 @@ func NewProvider(peerID, networkID string) *Provider {
 // NewVM creates a new DockerVM instance
 func (p *Provider) NewVM() container.VM {
 	// At this point check to see if we are in kubernetes
-	// and silently replace the docker connection with a kubernetes one.
-
 	if !kubernetescontroller.InCluster() {
 		dockerLogger.Info("Kubernetes not detected.")
 		return NewDockerVM(p.PeerID, p.NetworkID)
 	}
+	// In a cluster so replace the docker connection with a kubernetes one.
 	dockerLogger.Info("Kubernetes environment detected. Using K8s API.")
 	return kubernetescontroller.NewKubernetesAPI(p.PeerID, p.NetworkID)
 }
