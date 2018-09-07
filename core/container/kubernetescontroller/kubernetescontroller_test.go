@@ -16,13 +16,42 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/gomega"
+	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
-
-	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestFabric(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Fabric Suite")
+}
+
+var _ = Describe("Extract Root", func() {
+
+	It("Extracts a root path correctly", func() {
+
+		api := KubernetesAPI{
+			client:    nil, //kubernetes.Clientset(client),
+			PeerID:    "peer",
+			Namespace: "namespace",
+		}
+		testFiles := make(map[string][]byte, 3)
+		testFiles["/root/sub/one"] = []byte("onedata")
+		testFiles["/root/sub/two"] = []byte("twodata")
+		testFiles["/root/sub/three"] = []byte("threedata")
+		rPath, responseFiles := api.extractCommonRoot(testFiles)
+
+		Expect(rPath).To(Equal("/root/sub/"))
+		Expect(responseFiles).To(HaveLen(3))
+		Expect(responseFiles).To(HaveKey("one"))
+		// Expect(vmProvider.NewVMCallCount()).To(Equal(1))
+		// Expect(err).NotTo(HaveOccurred())
+	})
+})
 
 // TestFakeClient demonstrates how to use a fake client with SharedInformerFactory in tests.
 func TestFakeClient(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -137,7 +138,13 @@ func (api *KubernetesAPI) Stop(ctxt context.Context, ccid ccintf.CCID, timeout u
 func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*appv1.Deployment, error) {
 
 	podName := api.GetPodName(ccid)
-	kubernetesLogger.Info("Start chaincode", podName)
+	kubernetesLogger.Info("Starting chaincode", podName)
+
+	mountPoint, configMap, err := api.createChainCodeFilesConfigMap(podName, filesToUpload)
+	if err != nil {
+		kubernetesLogger.Fatal("Could not create config map for peer chaincode pod.")
+		return nil, err
+	}
 
 	envvars := []apiv1.EnvVar{}
 	for _, v := range env {
@@ -179,13 +186,99 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 							Image:   api.GetChainCodeImageName(ccid),
 							Command: args,
 							Env:     envvars,
+							VolumeMounts: []apiv1.VolumeMount{
+								{
+									Name:      "uploadedfiles-volume",
+									MountPath: mountPoint,
+								},
+							},
+						},
+					},
+					Volumes: []apiv1.Volume{
+						{
+							Name: "uploadedfiles-volume",
+							VolumeSource: apiv1.VolumeSource{
+								ConfigMap: &apiv1.ConfigMapVolumeSource{
+									LocalObjectReference: apiv1.LocalObjectReference{
+										Name: configMap.Name,
+									},
+								},
+							},
 						},
 					},
 				},
 			},
 		},
 	}
+	kubernetesLogger.Info("Creating chaincode peer pod deployment")
 	return api.client.AppsV1().Deployments(api.Namespace).Create(deployment)
+}
+
+// createChainCodeFilesConfigMap return the mount point to use with the create config map or an error if it could not be created.
+func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToUpload map[string][]byte) (string, *apiv1.ConfigMap, error) {
+
+	rootPath, binaryData := api.extractCommonRoot(filesToUpload)
+
+	configmap := &apiv1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: api.Namespace,
+			Labels: map[string]string{
+				"peerowner": api.PeerID,
+				"peercc":    podName,
+			},
+		},
+		BinaryData: binaryData,
+	}
+	// Try to delete any existing configmaps with this same name...
+	existing, _ := api.client.CoreV1().ConfigMaps(api.Namespace).List(metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("peercc=%s", podName),
+		Limit:         1,
+	})
+
+	// If this configmap exists already then update it... otherwise do a normal create
+	if existing.Size() > 0 {
+		kubernetesLogger.Infof("Updating existing configmap '%s' for chaincode pod files.", configmap.Name)
+		configmap, err := api.client.CoreV1().ConfigMaps(api.Namespace).Update(configmap)
+		return rootPath, configmap, err
+	}
+	kubernetesLogger.Infof("Creating chaincode configmap '%s' for files", configmap.Name)
+	configmap, err := api.client.CoreV1().ConfigMaps(api.Namespace).Create(configmap)
+	return rootPath, configmap, err
+}
+
+// extractCommonRoot looks at the list of files and returns the longest matching root path and an updated set of files with it removed.
+func (api *KubernetesAPI) extractCommonRoot(filesToUpload map[string][]byte) (string, map[string][]byte) {
+	// Check if we need to do anything
+	if len(filesToUpload) < 1 {
+		return "", nil
+	}
+
+	rootPath := reflect.ValueOf(filesToUpload).MapKeys()[0].String() // Start with any key in the set
+	foundRoot := strings.LastIndex(rootPath, "/") < 0                // We are done if there isn't a path to match
+
+	if foundRoot { // If there wasn't a root to find then use empty string
+		rootPath = ""
+	}
+	// While there isn't a common root matched in all files
+	for !foundRoot && strings.LastIndex(rootPath, "/") > 0 {
+		rootPath = rootPath[0 : strings.LastIndex(rootPath, "/")+1]
+		all := true
+		for k := range filesToUpload {
+			// Check to see if the key starts with the rootpath ...
+			kubernetesLogger.Infof("Checking %s for %s", k, rootPath)
+			all = strings.HasPrefix(k, rootPath) && all
+		}
+		foundRoot = all
+	}
+
+	// Create a new map using the updated keys with the root path
+	binaryData := make(map[string][]byte, len(filesToUpload))
+	for k, v := range filesToUpload {
+		binaryData[strings.Replace(k, rootPath, "", 1)] = v
+	}
+	kubernetesLogger.Debugf("Extracted root path '%s' for filemap.", rootPath)
+	return rootPath, binaryData
 }
 
 // stopAllInternal stops any running pods associated with this peer and the given chaincode.
