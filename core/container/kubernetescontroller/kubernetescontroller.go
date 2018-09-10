@@ -142,7 +142,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 
 	mountPoint, configMap, err := api.createChainCodeFilesConfigMap(podName, filesToUpload)
 	if err != nil {
-		kubernetesLogger.Fatal("Could not create config map for peer chaincode pod.")
+		kubernetesLogger.Errorf("Could not create config map for peer chaincode pod. %s", err)
 		return nil, err
 	}
 
@@ -237,7 +237,7 @@ func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToU
 	})
 
 	// If this configmap exists already then update it... otherwise do a normal create
-	if existing.Size() > 0 {
+	if len(existing.Items) > 0 {
 		kubernetesLogger.Infof("Updating existing configmap '%s' for chaincode pod files.", configmap.Name)
 		configmap, err := api.client.CoreV1().ConfigMaps(api.Namespace).Update(configmap)
 		return rootPath, configmap, err
