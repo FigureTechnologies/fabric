@@ -53,13 +53,15 @@ type KubernetesAPI struct {
 // NewKubernetesAPI creates an instance using the environmental Kubernetes configuration
 func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
 	// Empty or host networks map to default kubernetes namespace.
-	if networkID == "" || networkID == "host" {
-		networkID = apiv1.NamespaceDefault
+	namespace := viper.GetString("vm.kubernetes.namespace")
+	if len(namespace) == 0 {
+		kubernetesLogger.Warningf("NewKubernetesAPI - 'vm.kubernetes.namespace' not set. Using default namespace %s.", apiv1.NamespaceDefault)
+		namespace = apiv1.NamespaceDefault
 	}
 
 	api := KubernetesAPI{
 		PeerID:    peerID,
-		Namespace: "fabric", //networkID,
+		Namespace: namespace,
 	}
 
 	client, err := getKubernetesClient()
@@ -75,6 +77,12 @@ func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
 
 // InCluster returns true if the process is running in a pod inside a kubernetes cluster (and configuration can be accessed)
 func InCluster() bool {
+	enable := viper.GetBool("vm.kubernetes.enabled")
+	if !enable {
+		kubernetesLogger.Info("Kubernetes support is disabled.")
+		return false
+	}
+
 	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
 	if len(host) == 0 || len(port) == 0 {
 		kubernetesLogger.Info("Kubernetes service environment variables not found.")
@@ -105,7 +113,6 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 	}
 	// creates the clientset
 	return kubernetes.NewForConfig(config)
-	//p, err := clientset.Core().Pods("fabric").Get("asdf", metav1.GetOptions{})
 }
 
 // Start a pod in kubernetes for the chaincode
@@ -113,20 +120,20 @@ func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
 	// Clean up any existing deployments
-	api.stopAllInternal(ccid)
+	err := api.stopAllInternal(ccid)
+	if err != nil {
+		kubernetesLogger.Error("Could not stop/remove existing deployments.", err)
+		return err
+	}
 
 	podInstance, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
-
 	if err != nil {
 		kubernetesLogger.Errorf("start - cannot create chaincode pod %s", err)
 		return err
 	}
 
 	kubernetesLogger.Infof("Started chaincode peer pod %s", podInstance.GetName())
-	// example image name -
-	// dev-peer-0-loanledger-1535563072-1a8492a38dda35606bbdc1bff7ec06b51eb270ac1fdf36453091dc8d226f726e
-
-	return err
+	return nil
 }
 
 // Stop a running pod in kubernetes
@@ -224,8 +231,9 @@ func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToU
 			Name:      podName,
 			Namespace: api.Namespace,
 			Labels: map[string]string{
-				"peerowner": api.PeerID,
-				"peercc":    podName,
+				"peer-owner": api.PeerID,
+				"peercc":     podName,
+				"service":    "peer-chaincode",
 			},
 		},
 		BinaryData: binaryData,
@@ -247,6 +255,13 @@ func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToU
 	return rootPath, configmap, err
 }
 
+// deleteChainCodeFilesConfigMap removes the configuration map files assocaited with the peer chaincode deployment
+func (api *KubernetesAPI) deleteChainCodeFilesConfigMap(podName string) error {
+	opt := metav1.DeleteOptions{}
+	kubernetesLogger.Infof("Removing config map '%s' for peer chaincode deployment", podName)
+	return api.client.CoreV1().ConfigMaps(api.Namespace).Delete(podName, &opt)
+}
+
 // extractCommonRoot looks at the list of files and returns the longest matching root path and an updated set of files with it removed.
 func (api *KubernetesAPI) extractCommonRoot(filesToUpload map[string][]byte) (string, map[string][]byte) {
 	// Check if we need to do anything
@@ -266,7 +281,7 @@ func (api *KubernetesAPI) extractCommonRoot(filesToUpload map[string][]byte) (st
 		all := true
 		for k := range filesToUpload {
 			// Check to see if the key starts with the rootpath ...
-			kubernetesLogger.Infof("Checking %s for %s", k, rootPath)
+			kubernetesLogger.Debugf("Checking %s for %s", k, rootPath)
 			all = strings.HasPrefix(k, rootPath) && all
 		}
 		foundRoot = all
@@ -298,13 +313,13 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 			return err
 		}
 	}
-	return nil
+	return api.deleteChainCodeFilesConfigMap(api.GetPodName(ccid))
 }
 
 // FindPeerCCPod looks for pods associated with this peer assigned to the given chaincode
 func (api *KubernetesAPI) FindPeerCCPod(ccid ccintf.CCID) (*appv1.DeploymentList, error) {
 
-	labelExp := fmt.Sprintf("peer=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
+	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
 
 	listOptions := metav1.ListOptions{
 		LabelSelector: labelExp,
