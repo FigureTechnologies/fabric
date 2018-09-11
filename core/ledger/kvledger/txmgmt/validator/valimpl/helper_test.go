@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/validator/valinternal"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
+	lgrutil "github.com/hyperledger/fabric/core/ledger/util"
 	lutils "github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
@@ -294,6 +295,42 @@ func TestIncrementPvtdataVersionIfNeeded(t *testing.T) {
 		&statedb.VersionedValue{Value: []byte("value3_set_by_tx5"), Version: version.NewHeight(2, 5)}, // key3 should be unaffected because the tx6 was missing from pvt data
 		pvtUpdateBatch.Get("ns", "coll3", "key3"),
 	)
+}
+
+func TestPreprocessProtoBlockInvalidWriteset(t *testing.T) {
+	kvValidationFunc := func(key string, value []byte) error {
+		if value[0] == '_' {
+			return fmt.Errorf("value [%s] found to be invalid by 'kvValidationFunc for testing'", value)
+		}
+		return nil
+	}
+
+	rwSetBuilder := rwsetutil.NewRWSetBuilder()
+	rwSetBuilder.AddToWriteSet("ns", "key", []byte("_invalidValue")) // bad value
+	simulation1, err := rwSetBuilder.GetTxSimulationResults()
+	assert.NoError(t, err)
+	simulation1Bytes, err := simulation1.GetPubSimulationBytes()
+	assert.NoError(t, err)
+
+	rwSetBuilder = rwsetutil.NewRWSetBuilder()
+	rwSetBuilder.AddToWriteSet("ns", "key", []byte("validValue")) // good value
+	simulation2, err := rwSetBuilder.GetTxSimulationResults()
+	assert.NoError(t, err)
+	simulation2Bytes, err := simulation2.GetPubSimulationBytes()
+	assert.NoError(t, err)
+
+	block := testutil.ConstructBlock(t, 1, testutil.ConstructRandomBytes(t, 32),
+		[][]byte{simulation1Bytes, simulation2Bytes}, false) // block with two txs
+	txfilter := lgrutil.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	assert.True(t, txfilter.IsValid(0))
+	assert.True(t, txfilter.IsValid(1)) // both txs are valid initially at the time of block cutting
+
+	internalBlock, err := preprocessProtoBlock(nil, kvValidationFunc, block, false)
+	assert.NoError(t, err)
+	assert.False(t, txfilter.IsValid(0)) // tx at index 0 should be marked as invalid
+	assert.True(t, txfilter.IsValid(1))  // tx at index 1 should be marked as valid
+	assert.Len(t, internalBlock.Txs, 1)
+	assert.Equal(t, internalBlock.Txs[0].IndexInBlock, 1)
 }
 
 // from go-logging memory_test.go

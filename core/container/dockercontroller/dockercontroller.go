@@ -25,6 +25,7 @@ import (
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/container"
 	"github.com/hyperledger/fabric/core/container/ccintf"
+	"github.com/hyperledger/fabric/core/container/kubernetescontroller"
 	cutil "github.com/hyperledger/fabric/core/container/util"
 	"github.com/spf13/viper"
 )
@@ -78,7 +79,7 @@ type dockerClient interface {
 	RemoveContainer(opts docker.RemoveContainerOptions) error
 }
 
-// Controller implements container.VMProvider
+// Provider implements container.VMProvider
 type Provider struct {
 	PeerID    string
 	NetworkID string
@@ -94,7 +95,14 @@ func NewProvider(peerID, networkID string) *Provider {
 
 // NewVM creates a new DockerVM instance
 func (p *Provider) NewVM() container.VM {
-	return NewDockerVM(p.PeerID, p.NetworkID)
+	// At this point check to see if we are in kubernetes
+	if !kubernetescontroller.InCluster() {
+		dockerLogger.Info("Kubernetes not detected.")
+		return NewDockerVM(p.PeerID, p.NetworkID)
+	}
+	// In a cluster so replace the docker connection with a kubernetes one.
+	dockerLogger.Info("Kubernetes environment detected. Using K8s API.")
+	return kubernetescontroller.NewKubernetesAPI(p.PeerID, p.NetworkID)
 }
 
 // NewDockerVM returns a new DockerVM instance
