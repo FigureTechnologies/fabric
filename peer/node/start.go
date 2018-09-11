@@ -20,6 +20,7 @@ import (
 	ccdef "github.com/hyperledger/fabric/common/chaincode"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/deliver"
+	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/localmsp"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/viperutil"
@@ -195,6 +196,7 @@ func serve(args []string) error {
 	if err != nil {
 		logger.Fatalf("Error loading secure config for peer (%s)", err)
 	}
+	serverConfig.Logger = flogging.MustGetLogger("core/comm").With("server", "PeerServer")
 	peerServer, err := peer.NewPeerServer(listenAddr, serverConfig)
 	if err != nil {
 		logger.Fatalf("Failed to create peer server (%s)", err)
@@ -224,36 +226,8 @@ func serve(args []string) error {
 	abServer := peer.NewDeliverEventsServer(mutualTLS, policyCheckerProvider, &peer.DeliverChainManager{})
 	pb.RegisterDeliverServer(peerServer.Server(), abServer)
 
-	// Setup chaincode path
-	chaincodeInstallPath := ccprovider.GetChaincodeInstallPathFromViper()
-	ccprovider.SetChaincodesPath(chaincodeInstallPath)
-
-	packageProvider := &persistence.PackageProvider{
-		LegacyPP: &ccprovider.CCInfoFSImpl{},
-		Store: &persistence.Store{
-			Path:       chaincodeInstallPath,
-			ReadWriter: &persistence.FilesystemIO{},
-		},
-	}
-
-	// Create a self-signed CA for chaincode service
-	ca, err := tlsgen.NewCA()
-	if err != nil {
-		logger.Panic("Failed creating authentication layer:", err)
-	}
-	ccSrv, ccEndpoint, err := createChaincodeServer(ca, peerHost)
-	if err != nil {
-		logger.Panicf("Failed to create chaincode server: %s", err)
-	}
-	chaincodeSupport, ccp, sccp := registerChaincodeSupport(
-		ccSrv,
-		ccEndpoint,
-		ca,
-		packageProvider,
-		aclProvider,
-		pr,
-	)
-	go ccSrv.Start()
+	// Initialize chaincode service
+	chaincodeSupport, ccp, sccp, packageProvider := startChaincodeServer(peerHost, aclProvider, pr)
 
 	logger.Debugf("Running peer")
 
@@ -456,6 +430,9 @@ func createChaincodeServer(ca tlsgen.CA, peerHostname string) (srv *comm.GRPCSer
 		return nil, "", err
 	}
 
+	// set the logger for the server
+	config.Logger = flogging.MustGetLogger("core/comm").With("server", "ChaincodeServer")
+
 	// Override TLS configuration if TLS is applicable
 	if config.SecOpts.UseTLS {
 		// Create a self-signed TLS certificate with a SAN that matches the computed chaincode endpoint
@@ -599,6 +576,7 @@ func registerChaincodeSupport(grpcServer *comm.GRPCServer, ccEndpoint string, ca
 		}),
 		sccp,
 		pr,
+		peer.DefaultSupport,
 	)
 	ipRegistry.ChaincodeSupport = chaincodeSupport
 	ccp := chaincode.NewProvider(chaincodeSupport)
@@ -619,6 +597,44 @@ func registerChaincodeSupport(grpcServer *comm.GRPCServer, ccEndpoint string, ca
 	pb.RegisterChaincodeSupportServer(grpcServer.Server(), ccSrv)
 
 	return chaincodeSupport, ccp, sccp
+}
+
+// startChaincodeServer will finish chaincode related initialization, including:
+// 1) setup local chaincode install path
+// 2) create chaincode specific tls CA
+// 3) start the chaincode specific gRPC listening service
+func startChaincodeServer(peerHost string, aclProvider aclmgmt.ACLProvider, pr *platforms.Registry) (*chaincode.ChaincodeSupport, ccprovider.ChaincodeProvider, *scc.Provider, *persistence.PackageProvider) {
+	// Setup chaincode path
+	chaincodeInstallPath := ccprovider.GetChaincodeInstallPathFromViper()
+	ccprovider.SetChaincodesPath(chaincodeInstallPath)
+
+	packageProvider := &persistence.PackageProvider{
+		LegacyPP: &ccprovider.CCInfoFSImpl{},
+		Store: &persistence.Store{
+			Path:       chaincodeInstallPath,
+			ReadWriter: &persistence.FilesystemIO{},
+		},
+	}
+
+	// Create a self-signed CA for chaincode service
+	ca, err := tlsgen.NewCA()
+	if err != nil {
+		logger.Panic("Failed creating authentication layer:", err)
+	}
+	ccSrv, ccEndpoint, err := createChaincodeServer(ca, peerHost)
+	if err != nil {
+		logger.Panicf("Failed to create chaincode server: %s", err)
+	}
+	chaincodeSupport, ccp, sccp := registerChaincodeSupport(
+		ccSrv,
+		ccEndpoint,
+		ca,
+		packageProvider,
+		aclProvider,
+		pr,
+	)
+	go ccSrv.Start()
+	return chaincodeSupport, ccp, sccp, packageProvider
 }
 
 func adminHasSeparateListener(peerListenAddr string, adminListenAddress string) bool {
@@ -649,6 +665,7 @@ func startAdminServer(peerListenAddr string, peerServer *grpc.Server) {
 	if separateLsnrForAdmin {
 		logger.Info("Creating gRPC server for admin service on", adminListenAddress)
 		serverConfig, err := peer.GetServerConfig()
+		serverConfig.Logger = flogging.MustGetLogger("core/comm").With("server", "AdminServer")
 		if err != nil {
 			logger.Fatalf("Error loading secure config for admin service (%s)", err)
 		}

@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric/core/common/sysccprovider"
 	"github.com/hyperledger/fabric/core/container/ccintf"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	"github.com/hyperledger/fabric/core/peer"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
@@ -53,6 +54,7 @@ type ChaincodeSupport struct {
 	Launcher         Launcher
 	SystemCCProvider sysccprovider.SystemChaincodeProvider
 	Lifecycle        Lifecycle
+	appConfig        ApplicationConfigRetriever
 }
 
 // NewChaincodeSupport creates a new ChaincodeSupport instance.
@@ -68,6 +70,7 @@ func NewChaincodeSupport(
 	processor Processor,
 	SystemCCProvider sysccprovider.SystemChaincodeProvider,
 	platformRegistry *platforms.Registry,
+	appConfig ApplicationConfigRetriever,
 ) *ChaincodeSupport {
 	cs := &ChaincodeSupport{
 		UserRunsCC:       userRunsCC,
@@ -77,6 +80,7 @@ func NewChaincodeSupport(
 		ACLProvider:      aclProvider,
 		SystemCCProvider: SystemCCProvider,
 		Lifecycle:        lifecycle,
+		appConfig:        appConfig,
 	}
 
 	// Keep TestQueries working
@@ -175,9 +179,10 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		SystemCCProvider:           cs.SystemCCProvider,
 		SystemCCVersion:            util.GetSysCCVersion(),
 		InstantiationPolicyChecker: CheckInstantiationPolicyFunc(ccprovider.CheckInstantiationPolicy),
-		QueryResponseBuilder:       &QueryResponseGenerator{MaxResultLimit: 100},
+		QueryResponseBuilder:       &QueryResponseGenerator{MaxResultLimit: 100, TotalQueryLimit: ledgerconfig.GetTotalQueryLimit()},
 		UUIDGenerator:              UUIDGeneratorFunc(util.GenerateUUID),
 		LedgerGetter:               peer.Default,
+		AppConfig:                  cs.appConfig,
 	}
 
 	return handler.ProcessStream(stream)

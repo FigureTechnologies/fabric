@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/flogging"
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
@@ -21,6 +22,7 @@ import (
 	"github.com/hyperledger/fabric/core/common/sysccprovider"
 	"github.com/hyperledger/fabric/core/container/ccintf"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 )
@@ -81,7 +83,8 @@ func (c CheckInstantiationPolicyFunc) CheckInstantiationPolicy(name, version str
 // QueryResponseBuilder is responsible for building QueryResponse messages for query
 // transactions initiated by chaincode.
 type QueryResponseBuilder interface {
-	BuildQueryResponse(txContext *TransactionContext, iter commonledger.ResultsIterator, iterID string) (*pb.QueryResponse, error)
+	BuildQueryResponse(txContext *TransactionContext, iter commonledger.ResultsIterator,
+		iterID string, isPaginated bool, totalReturnLimit int32) (*pb.QueryResponse, error)
 }
 
 // ChaincodeDefinitionGetter is responsible for retrieving a chaincode definition
@@ -102,6 +105,13 @@ type UUIDGenerator interface {
 type UUIDGeneratorFunc func() string
 
 func (u UUIDGeneratorFunc) New() string { return u() }
+
+// ApplicationConfigRetriever to retrieve the application configuration for a channel
+type ApplicationConfigRetriever interface {
+	// GetApplicationConfig returns the channelconfig.Application for the channel
+	// and whether the Application config exists
+	GetApplicationConfig(cid string) (channelconfig.Application, bool)
+}
 
 // Handler implements the peer side of the chaincode stream.
 type Handler struct {
@@ -133,6 +143,8 @@ type Handler struct {
 	LedgerGetter LedgerGetter
 	// UUIDGenerator is used to generate UUIDs
 	UUIDGenerator UUIDGenerator
+	// AppConfig is used to retrieve the application config for a channel
+	AppConfig ApplicationConfigRetriever
 
 	// state holds the current handler state. It will be created, established, or
 	// ready.
@@ -205,6 +217,10 @@ func (h *Handler) handleMessageReadyState(msg *pb.ChaincodeMessage) error {
 	case pb.ChaincodeMessage_QUERY_STATE_CLOSE:
 		go h.HandleTransaction(msg, h.HandleQueryStateClose)
 
+	case pb.ChaincodeMessage_GET_STATE_METADATA:
+		go h.HandleTransaction(msg, h.HandleGetStateMetadata)
+	case pb.ChaincodeMessage_PUT_STATE_METADATA:
+		go h.HandleTransaction(msg, h.HandlePutStateMetadata)
 	default:
 		return fmt.Errorf("[%s] Fabric side handler cannot handle message (%s) while in ready state", msg.Txid, msg.Type)
 	}
@@ -530,6 +546,18 @@ func (h *Handler) registerTxid(msg *pb.ChaincodeMessage) bool {
 	return false
 }
 
+func (h *Handler) checkMetadataCap(msg *pb.ChaincodeMessage) error {
+	ac, exists := h.AppConfig.GetApplicationConfig(msg.ChannelId)
+	if !exists {
+		return errors.Errorf("application config does not exist for %s", msg.ChannelId)
+	}
+
+	if !ac.Capabilities().KeyLevelEndorsement() {
+		return errors.New("key level endorsement is not enabled")
+	}
+	return nil
+}
+
 // Handles query to ledger to get state
 func (h *Handler) HandleGetState(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
 	key := string(msg.Payload)
@@ -559,6 +587,45 @@ func (h *Handler) HandleGetState(msg *pb.ChaincodeMessage, txContext *Transactio
 	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: res, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
 }
 
+// Handles query to ledger to get state metadata
+func (h *Handler) HandleGetStateMetadata(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
+	err := h.checkMetadataCap(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	getStateMetadata := &pb.GetStateMetadata{}
+	err = proto.Unmarshal(msg.Payload, getStateMetadata)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal failed")
+	}
+
+	chaincodeName := h.ChaincodeName()
+	chaincodeLogger.Debugf("[%s] getting state metadata for chaincode %s, key %s, channel %s", shorttxid(msg.Txid), chaincodeName, getStateMetadata.Key, txContext.ChainID)
+
+	var metadata map[string][]byte
+	if isCollectionSet(getStateMetadata.Collection) {
+		metadata, err = txContext.TXSimulator.GetPrivateDataMetadata(chaincodeName, getStateMetadata.Collection, getStateMetadata.Key)
+	} else {
+		metadata, err = txContext.TXSimulator.GetStateMetadata(chaincodeName, getStateMetadata.Key)
+	}
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	var metadataResult pb.StateMetadataResult
+	for metakey := range metadata {
+		md := &pb.StateMetadata{Metakey: metakey, Value: metadata[metakey]}
+		metadataResult.Entries = append(metadataResult.Entries, md)
+	}
+	res, err := proto.Marshal(&metadataResult)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// Send response msg back to chaincode. GetState will not trigger event
+	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Payload: res, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
+}
+
 // Handles query to ledger to rage query state
 func (h *Handler) HandleGetStateByRange(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
 	getStateByRange := &pb.GetStateByRange{}
@@ -567,21 +634,49 @@ func (h *Handler) HandleGetStateByRange(msg *pb.ChaincodeMessage, txContext *Tra
 		return nil, errors.Wrap(err, "unmarshal failed")
 	}
 
+	metadata, err := getQueryMetadataFromBytes(getStateByRange.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	totalReturnLimit := calculateTotalReturnLimit(metadata)
+
 	iterID := h.UUIDGenerator.New()
 	chaincodeName := h.ChaincodeName()
 
 	var rangeIter commonledger.ResultsIterator
+	var paginationInfo map[string]interface{}
+
+	isPaginated := false
+
 	if isCollectionSet(getStateByRange.Collection) {
-		rangeIter, err = txContext.TXSimulator.GetPrivateDataRangeScanIterator(chaincodeName, getStateByRange.Collection, getStateByRange.StartKey, getStateByRange.EndKey)
+		rangeIter, err = txContext.TXSimulator.GetPrivateDataRangeScanIterator(chaincodeName, getStateByRange.Collection,
+			getStateByRange.StartKey, getStateByRange.EndKey)
+	} else if isMetadataSetForPagination(metadata) {
+		paginationInfo, err = createPaginationInfoFromMetadata(metadata, totalReturnLimit, pb.ChaincodeMessage_GET_STATE_BY_RANGE)
+		if err != nil {
+			return nil, err
+		}
+		isPaginated = true
+
+		startKey := getStateByRange.StartKey
+
+		if isMetadataSetForPagination(metadata) {
+			if metadata.Bookmark != "" {
+				startKey = metadata.Bookmark
+			}
+		}
+		rangeIter, err = txContext.TXSimulator.GetStateRangeScanIteratorWithMetadata(chaincodeName,
+			startKey, getStateByRange.EndKey, paginationInfo)
 	} else {
 		rangeIter, err = txContext.TXSimulator.GetStateRangeScanIterator(chaincodeName, getStateByRange.StartKey, getStateByRange.EndKey)
 	}
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	txContext.InitializeQueryContext(iterID, rangeIter)
-	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, rangeIter, iterID)
+
+	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, rangeIter, iterID, isPaginated, totalReturnLimit)
 	if err != nil {
 		txContext.CleanupQueryContext(iterID)
 		return nil, errors.WithStack(err)
@@ -610,7 +705,9 @@ func (h *Handler) HandleQueryStateNext(msg *pb.ChaincodeMessage, txContext *Tran
 		return nil, errors.New("query iterator not found")
 	}
 
-	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, queryIter, queryStateNext.Id)
+	totalReturnLimit := calculateTotalReturnLimit(nil)
+
+	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, queryIter, queryStateNext.Id, false, totalReturnLimit)
 	if err != nil {
 		txContext.CleanupQueryContext(queryStateNext.Id)
 		return nil, errors.WithStack(err)
@@ -658,9 +755,28 @@ func (h *Handler) HandleGetQueryResult(msg *pb.ChaincodeMessage, txContext *Tran
 		return nil, errors.Wrap(err, "unmarshal failed")
 	}
 
+	metadata, err := getQueryMetadataFromBytes(getQueryResult.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	totalReturnLimit := calculateTotalReturnLimit(metadata)
+	isPaginated := false
+
 	var executeIter commonledger.ResultsIterator
+	var paginationInfo map[string]interface{}
+
 	if isCollectionSet(getQueryResult.Collection) {
 		executeIter, err = txContext.TXSimulator.ExecuteQueryOnPrivateData(chaincodeName, getQueryResult.Collection, getQueryResult.Query)
+	} else if isMetadataSetForPagination(metadata) {
+		paginationInfo, err = createPaginationInfoFromMetadata(metadata, totalReturnLimit, pb.ChaincodeMessage_GET_QUERY_RESULT)
+		if err != nil {
+			return nil, err
+		}
+		isPaginated = true
+		executeIter, err = txContext.TXSimulator.ExecuteQueryWithMetadata(chaincodeName,
+			getQueryResult.Query, paginationInfo)
+
 	} else {
 		executeIter, err = txContext.TXSimulator.ExecuteQuery(chaincodeName, getQueryResult.Query)
 	}
@@ -670,7 +786,7 @@ func (h *Handler) HandleGetQueryResult(msg *pb.ChaincodeMessage, txContext *Tran
 
 	txContext.InitializeQueryContext(iterID, executeIter)
 
-	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, executeIter, iterID)
+	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, executeIter, iterID, isPaginated, totalReturnLimit)
 	if err != nil {
 		txContext.CleanupQueryContext(iterID)
 		return nil, errors.WithStack(err)
@@ -702,8 +818,10 @@ func (h *Handler) HandleGetHistoryForKey(msg *pb.ChaincodeMessage, txContext *Tr
 		return nil, errors.WithStack(err)
 	}
 
+	totalReturnLimit := calculateTotalReturnLimit(nil)
+
 	txContext.InitializeQueryContext(iterID, historyIter)
-	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, historyIter, iterID)
+	payload, err := h.QueryResponseBuilder.BuildQueryResponse(txContext, historyIter, iterID, false, totalReturnLimit)
 	if err != nil {
 		txContext.CleanupQueryContext(iterID)
 		return nil, errors.WithStack(err)
@@ -721,6 +839,57 @@ func (h *Handler) HandleGetHistoryForKey(msg *pb.ChaincodeMessage, txContext *Tr
 
 func isCollectionSet(collection string) bool {
 	return collection != ""
+}
+
+func isMetadataSetForPagination(metadata *pb.QueryMetadata) bool {
+	if metadata == nil {
+		return false
+	}
+
+	if metadata.PageSize == 0 && metadata.Bookmark == "" {
+		return false
+	}
+
+	return true
+}
+
+func getQueryMetadataFromBytes(metadataBytes []byte) (*pb.QueryMetadata, error) {
+	if metadataBytes != nil {
+		metadata := &pb.QueryMetadata{}
+		err := proto.Unmarshal(metadataBytes, metadata)
+		if err != nil {
+			return nil, errors.Wrap(err, "unmarshal failed")
+		}
+		return metadata, nil
+	}
+	return nil, nil
+}
+
+func createPaginationInfoFromMetadata(metadata *pb.QueryMetadata, totalReturnLimit int32, queryType pb.ChaincodeMessage_Type) (map[string]interface{}, error) {
+	paginationInfoMap := make(map[string]interface{})
+
+	switch queryType {
+	case pb.ChaincodeMessage_GET_QUERY_RESULT:
+		paginationInfoMap["bookmark"] = metadata.Bookmark
+	case pb.ChaincodeMessage_GET_STATE_BY_RANGE:
+		// this is a no-op for range query
+	default:
+		return nil, errors.New("query type must be either GetQueryResult or GetStateByRange")
+	}
+
+	paginationInfoMap["limit"] = totalReturnLimit
+	return paginationInfoMap, nil
+}
+
+func calculateTotalReturnLimit(metadata *pb.QueryMetadata) int32 {
+	totalReturnLimit := int32(ledgerconfig.GetTotalQueryLimit())
+	if metadata != nil {
+		pageSize := int32(metadata.PageSize)
+		if pageSize > 0 && pageSize < totalReturnLimit {
+			totalReturnLimit = pageSize
+		}
+	}
+	return totalReturnLimit
 }
 
 func (h *Handler) getTxContextForInvoke(channelID string, txid string, payload []byte, format string, args ...interface{}) (*TransactionContext, error) {
@@ -770,6 +939,34 @@ func (h *Handler) HandlePutState(msg *pb.ChaincodeMessage, txContext *Transactio
 		err = txContext.TXSimulator.SetPrivateData(chaincodeName, putState.Collection, putState.Key, putState.Value)
 	} else {
 		err = txContext.TXSimulator.SetState(chaincodeName, putState.Key, putState.Value)
+	}
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return &pb.ChaincodeMessage{Type: pb.ChaincodeMessage_RESPONSE, Txid: msg.Txid, ChannelId: msg.ChannelId}, nil
+}
+
+func (h *Handler) HandlePutStateMetadata(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
+	err := h.checkMetadataCap(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	putStateMetadata := &pb.PutStateMetadata{}
+	err = proto.Unmarshal(msg.Payload, putStateMetadata)
+	if err != nil {
+		return nil, errors.Wrap(err, "unmarshal failed")
+	}
+
+	metadata := make(map[string][]byte)
+	metadata[putStateMetadata.Metadata.Metakey] = putStateMetadata.Metadata.Value
+
+	chaincodeName := h.ChaincodeName()
+	if isCollectionSet(putStateMetadata.Collection) {
+		err = txContext.TXSimulator.SetPrivateDataMetadata(chaincodeName, putStateMetadata.Collection, putStateMetadata.Key, metadata)
+	} else {
+		err = txContext.TXSimulator.SetStateMetadata(chaincodeName, putStateMetadata.Key, metadata)
 	}
 	if err != nil {
 		return nil, errors.WithStack(err)

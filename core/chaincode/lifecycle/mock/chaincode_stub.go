@@ -117,6 +117,31 @@ type ChaincodeStub struct {
 	delStateReturnsOnCall map[int]struct {
 		result1 error
 	}
+	SetStateValidationParameterStub        func(key string, ep []byte) error
+	setStateValidationParameterMutex       sync.RWMutex
+	setStateValidationParameterArgsForCall []struct {
+		key string
+		ep  []byte
+	}
+	setStateValidationParameterReturns struct {
+		result1 error
+	}
+	setStateValidationParameterReturnsOnCall map[int]struct {
+		result1 error
+	}
+	GetStateValidationParameterStub        func(key string) ([]byte, error)
+	getStateValidationParameterMutex       sync.RWMutex
+	getStateValidationParameterArgsForCall []struct {
+		key string
+	}
+	getStateValidationParameterReturns struct {
+		result1 []byte
+		result2 error
+	}
+	getStateValidationParameterReturnsOnCall map[int]struct {
+		result1 []byte
+		result2 error
+	}
 	GetStateByRangeStub        func(startKey, endKey string) (shim.StateQueryIteratorInterface, error)
 	getStateByRangeMutex       sync.RWMutex
 	getStateByRangeArgsForCall []struct {
@@ -131,6 +156,24 @@ type ChaincodeStub struct {
 		result1 shim.StateQueryIteratorInterface
 		result2 error
 	}
+	GetStateByRangeWithPaginationStub        func(startKey, endKey string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error)
+	getStateByRangeWithPaginationMutex       sync.RWMutex
+	getStateByRangeWithPaginationArgsForCall []struct {
+		startKey string
+		endKey   string
+		pageSize int32
+		bookmark string
+	}
+	getStateByRangeWithPaginationReturns struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}
+	getStateByRangeWithPaginationReturnsOnCall map[int]struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}
 	GetStateByPartialCompositeKeyStub        func(objectType string, keys []string) (shim.StateQueryIteratorInterface, error)
 	getStateByPartialCompositeKeyMutex       sync.RWMutex
 	getStateByPartialCompositeKeyArgsForCall []struct {
@@ -144,6 +187,24 @@ type ChaincodeStub struct {
 	getStateByPartialCompositeKeyReturnsOnCall map[int]struct {
 		result1 shim.StateQueryIteratorInterface
 		result2 error
+	}
+	GetStateByPartialCompositeKeyWithPaginationStub        func(objectType string, keys []string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error)
+	getStateByPartialCompositeKeyWithPaginationMutex       sync.RWMutex
+	getStateByPartialCompositeKeyWithPaginationArgsForCall []struct {
+		objectType string
+		keys       []string
+		pageSize   int32
+		bookmark   string
+	}
+	getStateByPartialCompositeKeyWithPaginationReturns struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}
+	getStateByPartialCompositeKeyWithPaginationReturnsOnCall map[int]struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
 	}
 	CreateCompositeKeyStub        func(objectType string, attributes []string) (string, error)
 	createCompositeKeyMutex       sync.RWMutex
@@ -186,6 +247,23 @@ type ChaincodeStub struct {
 	getQueryResultReturnsOnCall map[int]struct {
 		result1 shim.StateQueryIteratorInterface
 		result2 error
+	}
+	GetQueryResultWithPaginationStub        func(query string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error)
+	getQueryResultWithPaginationMutex       sync.RWMutex
+	getQueryResultWithPaginationArgsForCall []struct {
+		query    string
+		pageSize int32
+		bookmark string
+	}
+	getQueryResultWithPaginationReturns struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}
+	getQueryResultWithPaginationReturnsOnCall map[int]struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
 	}
 	GetHistoryForKeyStub        func(key string) (shim.HistoryQueryIteratorInterface, error)
 	getHistoryForKeyMutex       sync.RWMutex
@@ -238,6 +316,33 @@ type ChaincodeStub struct {
 	}
 	delPrivateDataReturnsOnCall map[int]struct {
 		result1 error
+	}
+	SetPrivateDataValidationParameterStub        func(collection, key string, ep []byte) error
+	setPrivateDataValidationParameterMutex       sync.RWMutex
+	setPrivateDataValidationParameterArgsForCall []struct {
+		collection string
+		key        string
+		ep         []byte
+	}
+	setPrivateDataValidationParameterReturns struct {
+		result1 error
+	}
+	setPrivateDataValidationParameterReturnsOnCall map[int]struct {
+		result1 error
+	}
+	GetPrivateDataValidationParameterStub        func(collection, key string) ([]byte, error)
+	getPrivateDataValidationParameterMutex       sync.RWMutex
+	getPrivateDataValidationParameterArgsForCall []struct {
+		collection string
+		key        string
+	}
+	getPrivateDataValidationParameterReturns struct {
+		result1 []byte
+		result2 error
+	}
+	getPrivateDataValidationParameterReturnsOnCall map[int]struct {
+		result1 []byte
+		result2 error
 	}
 	GetPrivateDataByRangeStub        func(collection, startKey, endKey string) (shim.StateQueryIteratorInterface, error)
 	getPrivateDataByRangeMutex       sync.RWMutex
@@ -817,6 +922,111 @@ func (fake *ChaincodeStub) DelStateReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
+func (fake *ChaincodeStub) SetStateValidationParameter(key string, ep []byte) error {
+	var epCopy []byte
+	if ep != nil {
+		epCopy = make([]byte, len(ep))
+		copy(epCopy, ep)
+	}
+	fake.setStateValidationParameterMutex.Lock()
+	ret, specificReturn := fake.setStateValidationParameterReturnsOnCall[len(fake.setStateValidationParameterArgsForCall)]
+	fake.setStateValidationParameterArgsForCall = append(fake.setStateValidationParameterArgsForCall, struct {
+		key string
+		ep  []byte
+	}{key, epCopy})
+	fake.recordInvocation("SetStateValidationParameter", []interface{}{key, epCopy})
+	fake.setStateValidationParameterMutex.Unlock()
+	if fake.SetStateValidationParameterStub != nil {
+		return fake.SetStateValidationParameterStub(key, ep)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fake.setStateValidationParameterReturns.result1
+}
+
+func (fake *ChaincodeStub) SetStateValidationParameterCallCount() int {
+	fake.setStateValidationParameterMutex.RLock()
+	defer fake.setStateValidationParameterMutex.RUnlock()
+	return len(fake.setStateValidationParameterArgsForCall)
+}
+
+func (fake *ChaincodeStub) SetStateValidationParameterArgsForCall(i int) (string, []byte) {
+	fake.setStateValidationParameterMutex.RLock()
+	defer fake.setStateValidationParameterMutex.RUnlock()
+	return fake.setStateValidationParameterArgsForCall[i].key, fake.setStateValidationParameterArgsForCall[i].ep
+}
+
+func (fake *ChaincodeStub) SetStateValidationParameterReturns(result1 error) {
+	fake.SetStateValidationParameterStub = nil
+	fake.setStateValidationParameterReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *ChaincodeStub) SetStateValidationParameterReturnsOnCall(i int, result1 error) {
+	fake.SetStateValidationParameterStub = nil
+	if fake.setStateValidationParameterReturnsOnCall == nil {
+		fake.setStateValidationParameterReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.setStateValidationParameterReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *ChaincodeStub) GetStateValidationParameter(key string) ([]byte, error) {
+	fake.getStateValidationParameterMutex.Lock()
+	ret, specificReturn := fake.getStateValidationParameterReturnsOnCall[len(fake.getStateValidationParameterArgsForCall)]
+	fake.getStateValidationParameterArgsForCall = append(fake.getStateValidationParameterArgsForCall, struct {
+		key string
+	}{key})
+	fake.recordInvocation("GetStateValidationParameter", []interface{}{key})
+	fake.getStateValidationParameterMutex.Unlock()
+	if fake.GetStateValidationParameterStub != nil {
+		return fake.GetStateValidationParameterStub(key)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fake.getStateValidationParameterReturns.result1, fake.getStateValidationParameterReturns.result2
+}
+
+func (fake *ChaincodeStub) GetStateValidationParameterCallCount() int {
+	fake.getStateValidationParameterMutex.RLock()
+	defer fake.getStateValidationParameterMutex.RUnlock()
+	return len(fake.getStateValidationParameterArgsForCall)
+}
+
+func (fake *ChaincodeStub) GetStateValidationParameterArgsForCall(i int) string {
+	fake.getStateValidationParameterMutex.RLock()
+	defer fake.getStateValidationParameterMutex.RUnlock()
+	return fake.getStateValidationParameterArgsForCall[i].key
+}
+
+func (fake *ChaincodeStub) GetStateValidationParameterReturns(result1 []byte, result2 error) {
+	fake.GetStateValidationParameterStub = nil
+	fake.getStateValidationParameterReturns = struct {
+		result1 []byte
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *ChaincodeStub) GetStateValidationParameterReturnsOnCall(i int, result1 []byte, result2 error) {
+	fake.GetStateValidationParameterStub = nil
+	if fake.getStateValidationParameterReturnsOnCall == nil {
+		fake.getStateValidationParameterReturnsOnCall = make(map[int]struct {
+			result1 []byte
+			result2 error
+		})
+	}
+	fake.getStateValidationParameterReturnsOnCall[i] = struct {
+		result1 []byte
+		result2 error
+	}{result1, result2}
+}
+
 func (fake *ChaincodeStub) GetStateByRange(startKey string, endKey string) (shim.StateQueryIteratorInterface, error) {
 	fake.getStateByRangeMutex.Lock()
 	ret, specificReturn := fake.getStateByRangeReturnsOnCall[len(fake.getStateByRangeArgsForCall)]
@@ -867,6 +1077,63 @@ func (fake *ChaincodeStub) GetStateByRangeReturnsOnCall(i int, result1 shim.Stat
 		result1 shim.StateQueryIteratorInterface
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *ChaincodeStub) GetStateByRangeWithPagination(startKey string, endKey string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error) {
+	fake.getStateByRangeWithPaginationMutex.Lock()
+	ret, specificReturn := fake.getStateByRangeWithPaginationReturnsOnCall[len(fake.getStateByRangeWithPaginationArgsForCall)]
+	fake.getStateByRangeWithPaginationArgsForCall = append(fake.getStateByRangeWithPaginationArgsForCall, struct {
+		startKey string
+		endKey   string
+		pageSize int32
+		bookmark string
+	}{startKey, endKey, pageSize, bookmark})
+	fake.recordInvocation("GetStateByRangeWithPagination", []interface{}{startKey, endKey, pageSize, bookmark})
+	fake.getStateByRangeWithPaginationMutex.Unlock()
+	if fake.GetStateByRangeWithPaginationStub != nil {
+		return fake.GetStateByRangeWithPaginationStub(startKey, endKey, pageSize, bookmark)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2, ret.result3
+	}
+	return fake.getStateByRangeWithPaginationReturns.result1, fake.getStateByRangeWithPaginationReturns.result2, fake.getStateByRangeWithPaginationReturns.result3
+}
+
+func (fake *ChaincodeStub) GetStateByRangeWithPaginationCallCount() int {
+	fake.getStateByRangeWithPaginationMutex.RLock()
+	defer fake.getStateByRangeWithPaginationMutex.RUnlock()
+	return len(fake.getStateByRangeWithPaginationArgsForCall)
+}
+
+func (fake *ChaincodeStub) GetStateByRangeWithPaginationArgsForCall(i int) (string, string, int32, string) {
+	fake.getStateByRangeWithPaginationMutex.RLock()
+	defer fake.getStateByRangeWithPaginationMutex.RUnlock()
+	return fake.getStateByRangeWithPaginationArgsForCall[i].startKey, fake.getStateByRangeWithPaginationArgsForCall[i].endKey, fake.getStateByRangeWithPaginationArgsForCall[i].pageSize, fake.getStateByRangeWithPaginationArgsForCall[i].bookmark
+}
+
+func (fake *ChaincodeStub) GetStateByRangeWithPaginationReturns(result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetStateByRangeWithPaginationStub = nil
+	fake.getStateByRangeWithPaginationReturns = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
+}
+
+func (fake *ChaincodeStub) GetStateByRangeWithPaginationReturnsOnCall(i int, result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetStateByRangeWithPaginationStub = nil
+	if fake.getStateByRangeWithPaginationReturnsOnCall == nil {
+		fake.getStateByRangeWithPaginationReturnsOnCall = make(map[int]struct {
+			result1 shim.StateQueryIteratorInterface
+			result2 *pb.QueryResponseMetadata
+			result3 error
+		})
+	}
+	fake.getStateByRangeWithPaginationReturnsOnCall[i] = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
 }
 
 func (fake *ChaincodeStub) GetStateByPartialCompositeKey(objectType string, keys []string) (shim.StateQueryIteratorInterface, error) {
@@ -924,6 +1191,68 @@ func (fake *ChaincodeStub) GetStateByPartialCompositeKeyReturnsOnCall(i int, res
 		result1 shim.StateQueryIteratorInterface
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *ChaincodeStub) GetStateByPartialCompositeKeyWithPagination(objectType string, keys []string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error) {
+	var keysCopy []string
+	if keys != nil {
+		keysCopy = make([]string, len(keys))
+		copy(keysCopy, keys)
+	}
+	fake.getStateByPartialCompositeKeyWithPaginationMutex.Lock()
+	ret, specificReturn := fake.getStateByPartialCompositeKeyWithPaginationReturnsOnCall[len(fake.getStateByPartialCompositeKeyWithPaginationArgsForCall)]
+	fake.getStateByPartialCompositeKeyWithPaginationArgsForCall = append(fake.getStateByPartialCompositeKeyWithPaginationArgsForCall, struct {
+		objectType string
+		keys       []string
+		pageSize   int32
+		bookmark   string
+	}{objectType, keysCopy, pageSize, bookmark})
+	fake.recordInvocation("GetStateByPartialCompositeKeyWithPagination", []interface{}{objectType, keysCopy, pageSize, bookmark})
+	fake.getStateByPartialCompositeKeyWithPaginationMutex.Unlock()
+	if fake.GetStateByPartialCompositeKeyWithPaginationStub != nil {
+		return fake.GetStateByPartialCompositeKeyWithPaginationStub(objectType, keys, pageSize, bookmark)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2, ret.result3
+	}
+	return fake.getStateByPartialCompositeKeyWithPaginationReturns.result1, fake.getStateByPartialCompositeKeyWithPaginationReturns.result2, fake.getStateByPartialCompositeKeyWithPaginationReturns.result3
+}
+
+func (fake *ChaincodeStub) GetStateByPartialCompositeKeyWithPaginationCallCount() int {
+	fake.getStateByPartialCompositeKeyWithPaginationMutex.RLock()
+	defer fake.getStateByPartialCompositeKeyWithPaginationMutex.RUnlock()
+	return len(fake.getStateByPartialCompositeKeyWithPaginationArgsForCall)
+}
+
+func (fake *ChaincodeStub) GetStateByPartialCompositeKeyWithPaginationArgsForCall(i int) (string, []string, int32, string) {
+	fake.getStateByPartialCompositeKeyWithPaginationMutex.RLock()
+	defer fake.getStateByPartialCompositeKeyWithPaginationMutex.RUnlock()
+	return fake.getStateByPartialCompositeKeyWithPaginationArgsForCall[i].objectType, fake.getStateByPartialCompositeKeyWithPaginationArgsForCall[i].keys, fake.getStateByPartialCompositeKeyWithPaginationArgsForCall[i].pageSize, fake.getStateByPartialCompositeKeyWithPaginationArgsForCall[i].bookmark
+}
+
+func (fake *ChaincodeStub) GetStateByPartialCompositeKeyWithPaginationReturns(result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetStateByPartialCompositeKeyWithPaginationStub = nil
+	fake.getStateByPartialCompositeKeyWithPaginationReturns = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
+}
+
+func (fake *ChaincodeStub) GetStateByPartialCompositeKeyWithPaginationReturnsOnCall(i int, result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetStateByPartialCompositeKeyWithPaginationStub = nil
+	if fake.getStateByPartialCompositeKeyWithPaginationReturnsOnCall == nil {
+		fake.getStateByPartialCompositeKeyWithPaginationReturnsOnCall = make(map[int]struct {
+			result1 shim.StateQueryIteratorInterface
+			result2 *pb.QueryResponseMetadata
+			result3 error
+		})
+	}
+	fake.getStateByPartialCompositeKeyWithPaginationReturnsOnCall[i] = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
 }
 
 func (fake *ChaincodeStub) CreateCompositeKey(objectType string, attributes []string) (string, error) {
@@ -1086,6 +1415,62 @@ func (fake *ChaincodeStub) GetQueryResultReturnsOnCall(i int, result1 shim.State
 		result1 shim.StateQueryIteratorInterface
 		result2 error
 	}{result1, result2}
+}
+
+func (fake *ChaincodeStub) GetQueryResultWithPagination(query string, pageSize int32, bookmark string) (shim.StateQueryIteratorInterface, *pb.QueryResponseMetadata, error) {
+	fake.getQueryResultWithPaginationMutex.Lock()
+	ret, specificReturn := fake.getQueryResultWithPaginationReturnsOnCall[len(fake.getQueryResultWithPaginationArgsForCall)]
+	fake.getQueryResultWithPaginationArgsForCall = append(fake.getQueryResultWithPaginationArgsForCall, struct {
+		query    string
+		pageSize int32
+		bookmark string
+	}{query, pageSize, bookmark})
+	fake.recordInvocation("GetQueryResultWithPagination", []interface{}{query, pageSize, bookmark})
+	fake.getQueryResultWithPaginationMutex.Unlock()
+	if fake.GetQueryResultWithPaginationStub != nil {
+		return fake.GetQueryResultWithPaginationStub(query, pageSize, bookmark)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2, ret.result3
+	}
+	return fake.getQueryResultWithPaginationReturns.result1, fake.getQueryResultWithPaginationReturns.result2, fake.getQueryResultWithPaginationReturns.result3
+}
+
+func (fake *ChaincodeStub) GetQueryResultWithPaginationCallCount() int {
+	fake.getQueryResultWithPaginationMutex.RLock()
+	defer fake.getQueryResultWithPaginationMutex.RUnlock()
+	return len(fake.getQueryResultWithPaginationArgsForCall)
+}
+
+func (fake *ChaincodeStub) GetQueryResultWithPaginationArgsForCall(i int) (string, int32, string) {
+	fake.getQueryResultWithPaginationMutex.RLock()
+	defer fake.getQueryResultWithPaginationMutex.RUnlock()
+	return fake.getQueryResultWithPaginationArgsForCall[i].query, fake.getQueryResultWithPaginationArgsForCall[i].pageSize, fake.getQueryResultWithPaginationArgsForCall[i].bookmark
+}
+
+func (fake *ChaincodeStub) GetQueryResultWithPaginationReturns(result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetQueryResultWithPaginationStub = nil
+	fake.getQueryResultWithPaginationReturns = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
+}
+
+func (fake *ChaincodeStub) GetQueryResultWithPaginationReturnsOnCall(i int, result1 shim.StateQueryIteratorInterface, result2 *pb.QueryResponseMetadata, result3 error) {
+	fake.GetQueryResultWithPaginationStub = nil
+	if fake.getQueryResultWithPaginationReturnsOnCall == nil {
+		fake.getQueryResultWithPaginationReturnsOnCall = make(map[int]struct {
+			result1 shim.StateQueryIteratorInterface
+			result2 *pb.QueryResponseMetadata
+			result3 error
+		})
+	}
+	fake.getQueryResultWithPaginationReturnsOnCall[i] = struct {
+		result1 shim.StateQueryIteratorInterface
+		result2 *pb.QueryResponseMetadata
+		result3 error
+	}{result1, result2, result3}
 }
 
 func (fake *ChaincodeStub) GetHistoryForKey(key string) (shim.HistoryQueryIteratorInterface, error) {
@@ -1293,6 +1678,113 @@ func (fake *ChaincodeStub) DelPrivateDataReturnsOnCall(i int, result1 error) {
 	fake.delPrivateDataReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
+}
+
+func (fake *ChaincodeStub) SetPrivateDataValidationParameter(collection string, key string, ep []byte) error {
+	var epCopy []byte
+	if ep != nil {
+		epCopy = make([]byte, len(ep))
+		copy(epCopy, ep)
+	}
+	fake.setPrivateDataValidationParameterMutex.Lock()
+	ret, specificReturn := fake.setPrivateDataValidationParameterReturnsOnCall[len(fake.setPrivateDataValidationParameterArgsForCall)]
+	fake.setPrivateDataValidationParameterArgsForCall = append(fake.setPrivateDataValidationParameterArgsForCall, struct {
+		collection string
+		key        string
+		ep         []byte
+	}{collection, key, epCopy})
+	fake.recordInvocation("SetPrivateDataValidationParameter", []interface{}{collection, key, epCopy})
+	fake.setPrivateDataValidationParameterMutex.Unlock()
+	if fake.SetPrivateDataValidationParameterStub != nil {
+		return fake.SetPrivateDataValidationParameterStub(collection, key, ep)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fake.setPrivateDataValidationParameterReturns.result1
+}
+
+func (fake *ChaincodeStub) SetPrivateDataValidationParameterCallCount() int {
+	fake.setPrivateDataValidationParameterMutex.RLock()
+	defer fake.setPrivateDataValidationParameterMutex.RUnlock()
+	return len(fake.setPrivateDataValidationParameterArgsForCall)
+}
+
+func (fake *ChaincodeStub) SetPrivateDataValidationParameterArgsForCall(i int) (string, string, []byte) {
+	fake.setPrivateDataValidationParameterMutex.RLock()
+	defer fake.setPrivateDataValidationParameterMutex.RUnlock()
+	return fake.setPrivateDataValidationParameterArgsForCall[i].collection, fake.setPrivateDataValidationParameterArgsForCall[i].key, fake.setPrivateDataValidationParameterArgsForCall[i].ep
+}
+
+func (fake *ChaincodeStub) SetPrivateDataValidationParameterReturns(result1 error) {
+	fake.SetPrivateDataValidationParameterStub = nil
+	fake.setPrivateDataValidationParameterReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *ChaincodeStub) SetPrivateDataValidationParameterReturnsOnCall(i int, result1 error) {
+	fake.SetPrivateDataValidationParameterStub = nil
+	if fake.setPrivateDataValidationParameterReturnsOnCall == nil {
+		fake.setPrivateDataValidationParameterReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.setPrivateDataValidationParameterReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *ChaincodeStub) GetPrivateDataValidationParameter(collection string, key string) ([]byte, error) {
+	fake.getPrivateDataValidationParameterMutex.Lock()
+	ret, specificReturn := fake.getPrivateDataValidationParameterReturnsOnCall[len(fake.getPrivateDataValidationParameterArgsForCall)]
+	fake.getPrivateDataValidationParameterArgsForCall = append(fake.getPrivateDataValidationParameterArgsForCall, struct {
+		collection string
+		key        string
+	}{collection, key})
+	fake.recordInvocation("GetPrivateDataValidationParameter", []interface{}{collection, key})
+	fake.getPrivateDataValidationParameterMutex.Unlock()
+	if fake.GetPrivateDataValidationParameterStub != nil {
+		return fake.GetPrivateDataValidationParameterStub(collection, key)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	return fake.getPrivateDataValidationParameterReturns.result1, fake.getPrivateDataValidationParameterReturns.result2
+}
+
+func (fake *ChaincodeStub) GetPrivateDataValidationParameterCallCount() int {
+	fake.getPrivateDataValidationParameterMutex.RLock()
+	defer fake.getPrivateDataValidationParameterMutex.RUnlock()
+	return len(fake.getPrivateDataValidationParameterArgsForCall)
+}
+
+func (fake *ChaincodeStub) GetPrivateDataValidationParameterArgsForCall(i int) (string, string) {
+	fake.getPrivateDataValidationParameterMutex.RLock()
+	defer fake.getPrivateDataValidationParameterMutex.RUnlock()
+	return fake.getPrivateDataValidationParameterArgsForCall[i].collection, fake.getPrivateDataValidationParameterArgsForCall[i].key
+}
+
+func (fake *ChaincodeStub) GetPrivateDataValidationParameterReturns(result1 []byte, result2 error) {
+	fake.GetPrivateDataValidationParameterStub = nil
+	fake.getPrivateDataValidationParameterReturns = struct {
+		result1 []byte
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *ChaincodeStub) GetPrivateDataValidationParameterReturnsOnCall(i int, result1 []byte, result2 error) {
+	fake.GetPrivateDataValidationParameterStub = nil
+	if fake.getPrivateDataValidationParameterReturnsOnCall == nil {
+		fake.getPrivateDataValidationParameterReturnsOnCall = make(map[int]struct {
+			result1 []byte
+			result2 error
+		})
+	}
+	fake.getPrivateDataValidationParameterReturnsOnCall[i] = struct {
+		result1 []byte
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *ChaincodeStub) GetPrivateDataByRange(collection string, startKey string, endKey string) (shim.StateQueryIteratorInterface, error) {
@@ -1790,16 +2282,26 @@ func (fake *ChaincodeStub) Invocations() map[string][][]interface{} {
 	defer fake.putStateMutex.RUnlock()
 	fake.delStateMutex.RLock()
 	defer fake.delStateMutex.RUnlock()
+	fake.setStateValidationParameterMutex.RLock()
+	defer fake.setStateValidationParameterMutex.RUnlock()
+	fake.getStateValidationParameterMutex.RLock()
+	defer fake.getStateValidationParameterMutex.RUnlock()
 	fake.getStateByRangeMutex.RLock()
 	defer fake.getStateByRangeMutex.RUnlock()
+	fake.getStateByRangeWithPaginationMutex.RLock()
+	defer fake.getStateByRangeWithPaginationMutex.RUnlock()
 	fake.getStateByPartialCompositeKeyMutex.RLock()
 	defer fake.getStateByPartialCompositeKeyMutex.RUnlock()
+	fake.getStateByPartialCompositeKeyWithPaginationMutex.RLock()
+	defer fake.getStateByPartialCompositeKeyWithPaginationMutex.RUnlock()
 	fake.createCompositeKeyMutex.RLock()
 	defer fake.createCompositeKeyMutex.RUnlock()
 	fake.splitCompositeKeyMutex.RLock()
 	defer fake.splitCompositeKeyMutex.RUnlock()
 	fake.getQueryResultMutex.RLock()
 	defer fake.getQueryResultMutex.RUnlock()
+	fake.getQueryResultWithPaginationMutex.RLock()
+	defer fake.getQueryResultWithPaginationMutex.RUnlock()
 	fake.getHistoryForKeyMutex.RLock()
 	defer fake.getHistoryForKeyMutex.RUnlock()
 	fake.getPrivateDataMutex.RLock()
@@ -1808,6 +2310,10 @@ func (fake *ChaincodeStub) Invocations() map[string][][]interface{} {
 	defer fake.putPrivateDataMutex.RUnlock()
 	fake.delPrivateDataMutex.RLock()
 	defer fake.delPrivateDataMutex.RUnlock()
+	fake.setPrivateDataValidationParameterMutex.RLock()
+	defer fake.setPrivateDataValidationParameterMutex.RUnlock()
+	fake.getPrivateDataValidationParameterMutex.RLock()
+	defer fake.getPrivateDataValidationParameterMutex.RUnlock()
 	fake.getPrivateDataByRangeMutex.RLock()
 	defer fake.getPrivateDataByRangeMutex.RUnlock()
 	fake.getPrivateDataByPartialCompositeKeyMutex.RLock()
@@ -1846,3 +2352,5 @@ func (fake *ChaincodeStub) recordInvocation(key string, args []interface{}) {
 	}
 	fake.invocations[key] = append(fake.invocations[key], args)
 }
+
+var _ shim.ChaincodeStubInterface = new(ChaincodeStub)

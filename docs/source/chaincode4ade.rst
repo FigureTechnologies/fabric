@@ -15,7 +15,7 @@ network, so it similar to a "smart contract". A chaincode can be invoked to upda
 the ledger in a proposal transaction. Given the appropriate permission, a chaincode
 may invoke another chaincode, either in the same channel or in different channels, to access its state.
 Note that, if the called chaincode is on a different channel from the calling chaincode,
-only read query is allowed. That is, the called chaincode on a different channel is only a `Query`,
+only read query is allowed. That is, the called chaincode on a different channel is only a ``Query``,
 which does not participate in state validation checks in subsequent commit phase.
 
 In the following sections, we will explore chaincode through the eyes of an
@@ -25,7 +25,19 @@ and walk through the purpose of each method in the Chaincode Shim API.
 Chaincode API
 -------------
 
-Every chaincode program must implement the ``Chaincode interface``:
+.. note:: There is another set of chaincode APIs that allow the client (submitter)
+          identity to be used for access control decisions, whether that is based
+          on client identity itself, or the org identity, or on a client identity
+          attribute. For example an asset that is represented as a key/value may
+          include the client's identity, and only this client may be authorized
+          to make updates to the key/value. The client identity library has APIs
+          that chaincode can use to retrieve this submitter information to make
+          such access control decisions.
+
+          We won't cover that in this tutorial, however it is
+          `documented here <https://github.com/hyperledger/fabric/blob/master/core/chaincode/lib/cid/README.md>`_.
+
+Every chaincode program must implement the ``Chaincode`` interface:
 
   - `Go <https://godoc.org/github.com/hyperledger/fabric/core/chaincode/shim#Chaincode>`__
   - `node.js <https://fabric-shim.github.io/ChaincodeInterface.html>`__

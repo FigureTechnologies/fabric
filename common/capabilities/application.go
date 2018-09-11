@@ -100,13 +100,13 @@ func (ap *ApplicationProvider) V1_3Validation() bool {
 // v1.0/v1.1/v1.2 lifecycle, or whether it should use the newer per channel peer local chaincode
 // metadata package approach planned for release with Fabric v1.3
 func (ap *ApplicationProvider) MetadataLifecycle() bool {
-	return ap.v13
+	return false
 }
 
 // KeyLevelEndorsement returns true if this channel supports endorsement
 // policies expressible at a ledger key granularity, as described in FAB-8812
 func (ap *ApplicationProvider) KeyLevelEndorsement() bool {
-	return ap.v12 || ap.v13
+	return ap.v13
 }
 
 // HasCapability returns true if the capability is supported by this binary.

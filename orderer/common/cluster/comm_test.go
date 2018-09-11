@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -495,8 +496,14 @@ func TestNoTLSCertificate(t *testing.T) {
 	}
 	cl, err := comm_utils.NewGRPCClient(clientConfig)
 	assert.NoError(t, err)
-	conn, err := cl.NewConnection(node1.srv.Address(), "")
-	assert.NoError(t, err)
+
+	var conn *grpc.ClientConn
+	gt := gomega.NewGomegaWithT(t)
+	gt.Eventually(func() (bool, error) {
+		conn, err = cl.NewConnection(node1.srv.Address(), "")
+		return true, err
+	}).Should(gomega.BeTrue())
+
 	echoClient := orderer.NewClusterClient(conn)
 	_, err = echoClient.Step(context.Background(), testStepReq)
 	assert.EqualError(t, err, "rpc error: code = Unknown desc = no TLS certificate sent")
@@ -526,8 +533,12 @@ func TestReconnect(t *testing.T) {
 	node2.srv.Stop()
 	// Obtain the stub for node 2.
 	// Should succeed, because the connection was created at time of configuration
+	gt := gomega.NewGomegaWithT(t)
+	gt.Eventually(func() (bool, error) {
+		_, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
+		return true, err
+	}).Should(gomega.BeTrue())
 	stub, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
-	assert.NoError(t, err)
 	// Send a message from node 1 to node 2.
 	// Should fail.
 	_, err = stub.Step(testStepReq)
@@ -608,9 +619,14 @@ func TestMembershipReconfiguration(t *testing.T) {
 	_, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
 	assert.EqualError(t, err, fmt.Sprintf("node %d doesn't exist in channel test's membership", node2.nodeInfo.ID))
 	// Node 2 can connect to node 1, but it can't send it messages because node 1 doesn't know node 2 yet.
-	stub, err := node2.c.Remote(testChannel, node1.nodeInfo.ID)
-	assert.NoError(t, err)
 
+	gt := gomega.NewGomegaWithT(t)
+	gt.Eventually(func() (bool, error) {
+		_, err := node2.c.Remote(testChannel, node1.nodeInfo.ID)
+		return true, err
+	}).Should(gomega.BeTrue())
+
+	stub, err := node2.c.Remote(testChannel, node1.nodeInfo.ID)
 	_, err = stub.Step(testStepReq)
 	assert.EqualError(t, err, "rpc error: code = Unknown desc = certificate extracted from TLS connection isn't authorized")
 
