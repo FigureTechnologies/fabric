@@ -120,11 +120,7 @@ func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
 	// Clean up any existing deployments
-	err := api.stopAllInternal(ccid)
-	if err != nil {
-		kubernetesLogger.Error("Could not stop/remove existing deployments.", err)
-		return err
-	}
+	api.stopAllInternal(ccid)
 
 	podInstance, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
