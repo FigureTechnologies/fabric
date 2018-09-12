@@ -119,16 +119,16 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
-	// Clean up any existing deployments
-	api.stopAllInternal(ccid)
+	// Clean up any existing deployments (why do this?)
+	//api.stopAllInternal(ccid)
 
-	podInstance, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
+	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
-		kubernetesLogger.Errorf("start - cannot create chaincode pod %s", err)
+		kubernetesLogger.Errorf("start - cannot create chaincode deploy %s", err)
 		return err
 	}
 
-	kubernetesLogger.Infof("Started chaincode peer pod %s", podInstance.GetName())
+	kubernetesLogger.Infof("Started chaincode peer deployment %s", deploy.GetName())
 	return nil
 }
 
@@ -213,6 +213,18 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			},
 		},
 	}
+	// Check for existing deployment
+	existingDeploy, err := api.FindPeerCCDeployments(ccid)
+	if err != nil {
+		kubernetesLogger.Errorf("start - cannot search for existing cc deployment %s", err)
+		return nil, err
+	}
+	// If we are already out there then update the deployment
+	if len(existingDeploy.Items) > 0 {
+		kubernetesLogger.Info("Updating existing chaincode peer pod deployment")
+		return api.client.AppsV1().Deployments(api.Namespace).Update(deployment)
+	}
+	// Not already deployed so create it.
 	kubernetesLogger.Info("Creating chaincode peer pod deployment")
 	return api.client.AppsV1().Deployments(api.Namespace).Create(deployment)
 }
@@ -297,7 +309,7 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 	grace := int64(0)
 	ccdeploys, err := api.FindPeerCCDeployments(ccid)
 	if err != nil {
-		kubernetesLogger.Errorf("stop all - cannot search for peer chaincode pods %s", err)
+		kubernetesLogger.Errorf("stop all - cannot search for existing cc deployment %s", err)
 		return err
 	}
 	for _, deploy := range ccdeploys.Items {
