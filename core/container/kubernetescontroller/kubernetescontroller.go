@@ -140,7 +140,7 @@ func (api *KubernetesAPI) Stop(ctxt context.Context, ccid ccintf.CCID, timeout u
 
 func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*appv1.Deployment, error) {
 
-	podName := api.GetPodName(ccid)
+	podName := api.GetDeployName(ccid)
 	kubernetesLogger.Info("Starting chaincode", podName)
 
 	mountPoint, configMap, err := api.createChainCodeFilesConfigMap(podName, filesToUpload)
@@ -295,25 +295,25 @@ func (api *KubernetesAPI) extractCommonRoot(filesToUpload map[string][]byte) (st
 // stopAllInternal stops any running pods associated with this peer and the given chaincode.
 func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 	grace := int64(0)
-	ccpods, err := api.FindPeerCCPod(ccid)
+	ccdeploys, err := api.FindPeerCCDeployments(ccid)
 	if err != nil {
 		kubernetesLogger.Errorf("stop all - cannot search for peer chaincode pods %s", err)
 		return err
 	}
-	for _, pod := range ccpods.Items {
-		kubernetesLogger.Info("Removing existing chaincode pod %s", pod.Name)
-		err := api.client.CoreV1().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
+	for _, deploy := range ccdeploys.Items {
+		kubernetesLogger.Info("Removing existing chaincode deploy %s", deploy.Name)
+		err := api.client.AppsV1().Deployments(api.Namespace).Delete(deploy.Name, &metav1.DeleteOptions{
 			GracePeriodSeconds: &grace,
 		})
 		if err != nil {
 			return err
 		}
 	}
-	return api.deleteChainCodeFilesConfigMap(api.GetPodName(ccid))
+	return api.deleteChainCodeFilesConfigMap(api.GetDeployName(ccid))
 }
 
-// FindPeerCCPod looks for pods associated with this peer assigned to the given chaincode
-func (api *KubernetesAPI) FindPeerCCPod(ccid ccintf.CCID) (*appv1.DeploymentList, error) {
+// FindPeerCCDeployments looks for pods associated with this peer assigned to the given chaincode
+func (api *KubernetesAPI) FindPeerCCDeployments(ccid ccintf.CCID) (*appv1.DeploymentList, error) {
 
 	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
 
@@ -325,8 +325,8 @@ func (api *KubernetesAPI) FindPeerCCPod(ccid ccintf.CCID) (*appv1.DeploymentList
 	return api.client.AppsV1().Deployments(api.Namespace).List(listOptions)
 }
 
-// GetPodName composes a name for a chaincode pod based on available
-func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
+// GetDeployName composes a name for a chaincode pod based on available
+func (api *KubernetesAPI) GetDeployName(ccid ccintf.CCID) string {
 	name := ccid.GetName()
 
 	if api.PeerID != "" {
