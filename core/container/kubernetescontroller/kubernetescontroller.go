@@ -14,7 +14,9 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 
@@ -157,6 +159,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 	}
 
 	replicas := int32(1)
+	cacheBreaker := strconv.FormatInt(time.Now().UnixNano(), 10)
 	deployment := &appv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -180,6 +183,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 						"ccname":     ccid.Name,
 						"ccver":      ccid.Version,
 						"cc":         podName,
+						"deployed":   cacheBreaker, // because this will change on every call it means the pods will be recreated due to an updated spec.
 					},
 				},
 				Spec: apiv1.PodSpec{
