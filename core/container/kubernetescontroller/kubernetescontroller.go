@@ -167,6 +167,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			},
 		},
 		Spec: apiv1.PodSpec{
+			RestartPolicy: "Never", // If we exit for any reason rely on the Peer to reschedule.
 			Containers: []apiv1.Container{
 				{
 					Name:    "fabric-chaincode-mycc-container",
