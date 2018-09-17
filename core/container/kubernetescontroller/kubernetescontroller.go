@@ -118,7 +118,7 @@ func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
 	// Clean up any existing deployments (why do this?)
-	//api.stopAllInternal(ccid)
+	api.stopAllInternal(ccid)
 
 	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
