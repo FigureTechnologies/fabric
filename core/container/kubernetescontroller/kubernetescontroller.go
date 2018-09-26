@@ -8,7 +8,6 @@ SPDX-License-Identifier: BSD-3-Clause-Attribution
 package kubernetescontroller
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -114,7 +113,7 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 }
 
 // Start a pod in kubernetes for the chaincode
-func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
+func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
 	// Clean up any existing deployments (why do this?)
@@ -131,7 +130,7 @@ func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 }
 
 // Stop a running pod in kubernetes
-func (api *KubernetesAPI) Stop(ctxt context.Context, ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
+func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
 	// Remove any existing deployments by matching labels
 	return api.stopAllInternal(ccid)
 }
