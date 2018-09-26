@@ -8,6 +8,7 @@ package cluster_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -24,7 +25,6 @@ import (
 	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -395,6 +395,12 @@ func TestInvalidChannel(t *testing.T) {
 		defer node1.stop()
 
 		node1.c.Configure(testChannel, []cluster.RemoteNode{node1.nodeInfo})
+		gt := gomega.NewGomegaWithT(t)
+		gt.Eventually(func() (bool, error) {
+			_, err := node1.c.Remote(testChannel, node1.nodeInfo.ID)
+			return true, err
+		}).Should(gomega.BeTrue())
+
 		stub, err := node1.c.Remote(testChannel, node1.nodeInfo.ID)
 		assert.NoError(t, err)
 		// An empty StepRequest has an empty channel which is invalid
@@ -668,8 +674,13 @@ func TestShutdown(t *testing.T) {
 	node2.c.Configure(testChannel, []cluster.RemoteNode{node1.nodeInfo})
 	// Configuration of node doesn't take place
 	node1.c.Configure(testChannel, []cluster.RemoteNode{node2.nodeInfo})
+	gt := gomega.NewGomegaWithT(t)
+	gt.Eventually(func() (bool, error) {
+		_, err := node2.c.Remote(testChannel, node1.nodeInfo.ID)
+		return true, err
+	}).Should(gomega.BeTrue())
+
 	stub, err := node2.c.Remote(testChannel, node1.nodeInfo.ID)
-	assert.NoError(t, err)
 	// Therefore, sending a message doesn't succeed because node 1 rejected the configuration change
 	_, err = stub.Step(testStepReq)
 	assert.EqualError(t, err, "rpc error: code = Unknown desc = channel test doesn't exist")

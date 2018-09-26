@@ -142,6 +142,9 @@ func (txmgr *LockBasedTxMgr) invokeNamespaceListeners() error {
 
 // Shutdown implements method in interface `txmgmt.TxMgr`
 func (txmgr *LockBasedTxMgr) Shutdown() {
+	// wait for background go routine to finish else the timing issue causes a nil pointer inside goleveldb code
+	// see FAB-11974
+	txmgr.pvtdataPurgeMgr.WaitForPrepareToFinish()
 	txmgr.db.Close()
 }
 
@@ -221,7 +224,14 @@ func (txmgr *LockBasedTxMgr) CommitLostBlock(blockAndPvtdata *ledger.BlockAndPvt
 	if err := txmgr.ValidateAndPrepare(blockAndPvtdata, false); err != nil {
 		return err
 	}
-	logger.Debugf("Committing block %d to state database", block.Header.Number)
+
+	// log every 1000th block at Info level so that statedb rebuild progress can be tracked in production envs.
+	if block.Header.Number%1000 == 0 {
+		logger.Infof("Recommitting block [%d] to state database", block.Header.Number)
+	} else {
+		logger.Debugf("Recommitting block [%d] to state database", block.Header.Number)
+	}
+
 	return txmgr.Commit()
 }
 

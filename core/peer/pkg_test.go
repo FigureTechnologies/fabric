@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package peer_test
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -17,10 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc/credentials"
-
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/golang/protobuf/proto"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
@@ -62,8 +61,8 @@ func createCertPool(rootCAs [][]byte) (*x509.CertPool, error) {
 func invokeEmptyCall(address string, dialOptions []grpc.DialOption) (*testpb.Empty, error) {
 	//add DialOptions
 	dialOptions = append(dialOptions, grpc.WithBlock())
-	ctx := context.Background()
-	ctx, _ = context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	//create GRPC client conn
 	clientConn, err := grpc.DialContext(ctx, address, dialOptions...)
 	if err != nil {
@@ -74,12 +73,8 @@ func invokeEmptyCall(address string, dialOptions []grpc.DialOption) (*testpb.Emp
 	//create GRPC client
 	client := testpb.NewTestServiceClient(clientConn)
 
-	callCtx := context.Background()
-	callCtx, cancel := context.WithTimeout(callCtx, timeout)
-	defer cancel()
-
 	//invoke service
-	empty, err := client.EmptyCall(callCtx, new(testpb.Empty))
+	empty, err := client.EmptyCall(context.Background(), new(testpb.Empty))
 	if err != nil {
 		return nil, err
 	}

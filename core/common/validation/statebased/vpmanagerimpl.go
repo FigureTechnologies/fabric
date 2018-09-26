@@ -219,8 +219,11 @@ func (c *validationContext) waitForValidationResults(kid *ledgerKeyID, blockNum 
 	for _, dep := range c.dependenciesForTxnum(kid, txnum) {
 		if valErr := dep.waitForAndRetrieveValidationResult(kid.cc); valErr == nil {
 			return &ValidationParameterUpdatedError{
+				CC:     kid.cc,
+				Coll:   kid.coll,
 				Key:    kid.key,
 				Height: blockNum,
+				Txnum:  txnum,
 			}
 		}
 	}
@@ -310,14 +313,14 @@ func (m *KeyLevelValidationParameterManagerImpl) GetValidationParameterForKey(cc
 	if coll == "" {
 		mdMap, err = state.GetStateMetadata(cc, key)
 		if err != nil {
-			err = errors.WithMessage(err, fmt.Sprintf("could not retrieve metadata for %s:%s:%s", cc, coll, key))
+			err = errors.WithMessage(err, fmt.Sprintf("could not retrieve metadata for %s:%s", cc, key))
 			logger.Errorf(err.Error())
 			return nil, err
 		}
 	} else {
-		mdMap, err = state.GetPrivateDataMetadata(cc, coll, key)
+		mdMap, err = state.GetPrivateDataMetadataByHash(cc, coll, []byte(key))
 		if err != nil {
-			err = errors.WithMessage(err, fmt.Sprintf("could not retrieve metadata for %s:%s:%s", cc, coll, key))
+			err = errors.WithMessage(err, fmt.Sprintf("could not retrieve metadata for %s:%s:%x", cc, coll, []byte(key)))
 			logger.Errorf(err.Error())
 			return nil, err
 		}

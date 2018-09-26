@@ -237,6 +237,7 @@ func (g *gossipServiceImpl) InitializeChannel(chainID string, endpoints []string
 	fetcher := privdata2.NewPuller(support.Cs, g.gossipSvc, dataRetriever, collectionAccessFactory, chainID)
 
 	coordinator := privdata2.NewCoordinator(privdata2.Support{
+		ChainID:         chainID,
 		CollectionStore: support.Cs,
 		Validator:       support.Validator,
 		TransientStore:  support.Store,
@@ -244,15 +245,14 @@ func (g *gossipServiceImpl) InitializeChannel(chainID string, endpoints []string
 		Fetcher:         fetcher,
 	}, g.createSelfSignedData())
 
-	reconciler := privdata2.NewReconciler(support.Committer, fetcher, privdata2.GetReconcilerConfig())
-	reconciler.Start()
-
 	g.privateHandlers[chainID] = privateHandler{
 		support:     support,
 		coordinator: coordinator,
 		distributor: privdata2.NewDistributor(chainID, g, collectionAccessFactory),
-		reconciler:  reconciler,
+		reconciler:  &privdata2.NoOpReconciler{},
 	}
+	g.privateHandlers[chainID].reconciler.Start()
+
 	g.chains[chainID] = state.NewGossipStateProvider(chainID, servicesAdapter, coordinator)
 	if g.deliveryService[chainID] == nil {
 		var err error

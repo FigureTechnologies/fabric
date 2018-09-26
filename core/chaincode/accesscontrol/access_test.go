@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package accesscontrol
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -21,7 +22,6 @@ import (
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -112,8 +112,8 @@ func newClient(t *testing.T, port int, cert *tls.Certificate, peerCACert []byte)
 		tlsCfg.Certificates = []tls.Certificate{*cert}
 	}
 	tlsOpts := grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	ctx := context.Background()
-	ctx, _ = context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	conn, err := grpc.DialContext(ctx, fmt.Sprintf("localhost:%d", port), tlsOpts, grpc.WithBlock())
 	if err != nil {
 		return nil, err

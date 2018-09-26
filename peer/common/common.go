@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package common
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -31,7 +32,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/net/context"
 )
 
 // UndefinedParamValue defines what undefined parameters in the command line will initialise to
@@ -238,7 +238,7 @@ func SetLogLevelFromViper(module string) error {
 	// of logging submodules
 	module = strings.Replace(module, ".", "/", -1)
 	// only set logging modules that begin with the supplied module name here
-	err = flogging.SetModuleLevel("^"+module, logLevelFromViper)
+	err = flogging.SetModuleLevels("^"+module, logLevelFromViper)
 	return err
 }
 
@@ -292,7 +292,6 @@ func configFromEnv(prefix string) (address, override string, clientConfig comm.C
 }
 
 func InitCmd(cmd *cobra.Command, args []string) {
-
 	err := InitConfig(CmdRoot)
 	if err != nil { // Handle errors reading the config file
 		mainLogger.Errorf("Fatal error when initializing %s config : %s", CmdRoot, err)

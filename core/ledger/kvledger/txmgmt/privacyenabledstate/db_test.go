@@ -9,10 +9,12 @@ package privacyenabledstate
 import (
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/ledger/cceventmgmt"
@@ -20,12 +22,12 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
-	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
 	viper.Set("peer.fileSystemPath", "/tmp/fabric/ledgertests/kvledger/txmgmt/privacyenabledstate")
+	// Disable auto warm to avoid error logs when the couchdb database has been dropped
+	viper.Set("ledger.state.couchDBConfig.autoWarmIndexes", false)
 	os.Exit(m.Run())
 }
 
@@ -179,7 +181,7 @@ func testGetStateMultipleKeys(t *testing.T, env TestEnv) {
 func TestGetStateRangeScanIterator(t *testing.T) {
 	for _, env := range testEnvs {
 		t.Run(env.GetName(), func(t *testing.T) {
-			testGetStateMultipleKeys(t, env)
+			testGetStateRangeScanIterator(t, env)
 		})
 	}
 }
@@ -275,42 +277,42 @@ func testQueryOnCouchDB(t *testing.T, env TestEnv) {
 
 	// query for owner=jerry, use namespace "ns1"
 	itr, err := db.ExecuteQuery("ns1", `{"selector":{"owner":"jerry"}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(1)}, []string{"jerry"})
 
 	// query for owner=jerry, use namespace "ns2"
 	itr, err = db.ExecuteQuery("ns2", `{"selector":{"owner":"jerry"}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(1)}, []string{"jerry"})
 
 	// query for pvt data owner=jerry, use namespace "ns1"
 	itr, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", `{"selector":{"owner":"jerry"}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(1)}, []string{"jerry"})
 
 	// query for pvt data owner=jerry, use namespace "ns2"
 	itr, err = db.ExecuteQueryOnPrivateData("ns2", "coll1", `{"selector":{"owner":"jerry"}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(1)}, []string{"jerry"})
 
 	// query using bad query string
 	itr, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", "this is an invalid query string")
-	testutil.AssertError(t, err, "Should have received an error for invalid query string")
+	assert.Error(t, err, "Should have received an error for invalid query string")
 
 	// query returns 0 records
 	itr, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", `{"selector":{"owner":"not_a_valid_name"}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{}, []string{})
 
 	// query with embedded implicit "AND" and explicit "OR", namespace "ns1"
 	itr, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", `{"selector":{"color":"green","$or":[{"owner":"fred"},{"owner":"mary"}]}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(8), testKey(9)}, []string{"green"}, []string{"green"})
 
 	// query with integer with digit-count equals 7 and response received is also received
 	// with same digit-count and there is no float transformation
 	itr, err = db.ExecuteQueryOnPrivateData("ns2", "coll1", `{"selector":{"$and":[{"size":{"$eq": 1000007}}]}}`)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 	testQueryItr(t, itr, []string{testKey(10)}, []string{"joe", "1000007"})
 }
 
@@ -361,11 +363,11 @@ func testItr(t *testing.T, itr statedb.ResultsIterator, expectedKeys []string) {
 		queryResult, _ := itr.Next()
 		vkv := queryResult.(*statedb.VersionedKV)
 		key := vkv.Key
-		testutil.AssertEquals(t, key, expectedKey)
+		assert.Equal(t, expectedKey, key)
 	}
 	last, err := itr.Next()
-	testutil.AssertNoError(t, err, "")
-	testutil.AssertNil(t, last)
+	assert.NoError(t, err)
+	assert.Nil(t, last)
 }
 
 func testQueryItr(t *testing.T, itr statedb.ResultsIterator, expectedKeys []string, expectedValStrs ...[]string) {
@@ -375,14 +377,14 @@ func testQueryItr(t *testing.T, itr statedb.ResultsIterator, expectedKeys []stri
 		vkv := queryResult.(*statedb.VersionedKV)
 		key := vkv.Key
 		valStr := string(vkv.Value)
-		testutil.AssertEquals(t, key, expectedKey)
+		assert.Equal(t, expectedKey, key)
 		for _, expectedValStr := range expectedValStrs[i] {
-			testutil.AssertEquals(t, strings.Contains(valStr, expectedValStr), true)
+			assert.Contains(t, valStr, expectedValStr)
 		}
 	}
 	last, err := itr.Next()
-	testutil.AssertNoError(t, err, "")
-	testutil.AssertNil(t, last)
+	assert.NoError(t, err)
+	assert.Nil(t, last)
 }
 
 func testKey(i int) string {
@@ -396,19 +398,19 @@ func TestCompositeKeyMap(t *testing.T) {
 	b.Put("ns2", "coll1", "key1", []byte("testVal3"), nil)
 	b.Put("ns2", "coll2", "key2", []byte("testVal4"), nil)
 	m := b.ToCompositeKeyMap()
-	testutil.AssertEquals(t, len(m), 4)
+	assert.Len(t, m, 4)
 	vv, ok := m[PvtdataCompositeKey{"ns1", "coll1", "key1"}]
-	testutil.AssertEquals(t, ok, true)
-	testutil.AssertEquals(t, vv.Value, []byte("testVal1"))
+	assert.True(t, ok)
+	assert.Equal(t, []byte("testVal1"), vv.Value)
 	vv, ok = m[PvtdataCompositeKey{"ns1", "coll2", "key2"}]
-	testutil.AssertNil(t, vv.Value)
-	testutil.AssertEquals(t, ok, true)
+	assert.Nil(t, vv.Value)
+	assert.True(t, ok)
 	_, ok = m[PvtdataCompositeKey{"ns2", "coll1", "key1"}]
-	testutil.AssertEquals(t, ok, true)
+	assert.True(t, ok)
 	_, ok = m[PvtdataCompositeKey{"ns2", "coll2", "key2"}]
-	testutil.AssertEquals(t, ok, true)
+	assert.True(t, ok)
 	_, ok = m[PvtdataCompositeKey{"ns2", "coll1", "key8888"}]
-	testutil.AssertEquals(t, ok, false)
+	assert.False(t, ok)
 }
 
 func TestHandleChainCodeDeployOnCouchDB(t *testing.T) {
@@ -455,10 +457,10 @@ func testHandleChainCodeDeploy(t *testing.T, env TestEnv) {
 	// Test indexes for side databases
 	dbArtifactsTarBytes := testutil.CreateTarBytesForTest(
 		[]*testutil.TarFileEntry{
-			{"META-INF/statedb/couchdb/indexes/indexColorSortName.json", `{"index":{"fields":[{"color":"desc"}]},"ddoc":"indexColorSortName","name":"indexColorSortName","type":"json"}`},
-			{"META-INF/statedb/couchdb/indexes/indexSizeSortName.json", `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`},
-			{"META-INF/statedb/couchdb/collections/collectionMarbles/indexes/indexCollMarbles.json", `{"index":{"fields":["docType","owner"]},"ddoc":"indexCollectionMarbles", "name":"indexCollectionMarbles","type":"json"}`},
-			{"META-INF/statedb/couchdb/collections/collectionMarblesPrivateDetails/indexes/indexCollPrivDetails.json", `{"index":{"fields":["docType","price"]},"ddoc":"indexPrivateDetails", "name":"indexPrivateDetails","type":"json"}`},
+			{Name: "META-INF/statedb/couchdb/indexes/indexColorSortName.json", Body: `{"index":{"fields":[{"color":"desc"}]},"ddoc":"indexColorSortName","name":"indexColorSortName","type":"json"}`},
+			{Name: "META-INF/statedb/couchdb/indexes/indexSizeSortName.json", Body: `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`},
+			{Name: "META-INF/statedb/couchdb/collections/collectionMarbles/indexes/indexCollMarbles.json", Body: `{"index":{"fields":["docType","owner"]},"ddoc":"indexCollectionMarbles", "name":"indexCollectionMarbles","type":"json"}`},
+			{Name: "META-INF/statedb/couchdb/collections/collectionMarblesPrivateDetails/indexes/indexCollPrivDetails.json", Body: `{"index":{"fields":["docType","price"]},"ddoc":"indexPrivateDetails", "name":"indexPrivateDetails","type":"json"}`},
 		},
 	)
 
@@ -467,13 +469,13 @@ func testHandleChainCodeDeploy(t *testing.T, env TestEnv) {
 	assert.NoError(t, err)
 
 	// There should be 3 entries
-	assert.Equal(t, 3, len(fileEntries))
+	assert.Len(t, fileEntries, 3)
 
 	// There should be 2 entries for main
-	assert.Equal(t, 2, len(fileEntries["META-INF/statedb/couchdb/indexes"]))
+	assert.Len(t, fileEntries["META-INF/statedb/couchdb/indexes"], 2)
 
 	// There should be 1 entry for collectionMarbles
-	assert.Equal(t, 1, len(fileEntries["META-INF/statedb/couchdb/collections/collectionMarbles/indexes"]))
+	assert.Len(t, fileEntries["META-INF/statedb/couchdb/collections/collectionMarbles/indexes"], 1)
 
 	// Verify the content of the array item
 	expectedJSON := []byte(`{"index":{"fields":["docType","owner"]},"ddoc":"indexCollectionMarbles", "name":"indexCollectionMarbles","type":"json"}`)
@@ -511,22 +513,22 @@ func testHandleChainCodeDeploy(t *testing.T, env TestEnv) {
 
 	//Test HandleChaincodeDefinition with a nil tar file
 	err = commonStorageDB.HandleChaincodeDeploy(chaincodeDef, nil)
-	testutil.AssertNoError(t, err, "")
+	assert.NoError(t, err)
 
 	//Test HandleChaincodeDefinition with a bad tar file
 	err = commonStorageDB.HandleChaincodeDeploy(chaincodeDef, []byte(`This is a really bad tar file`))
-	testutil.AssertNoError(t, err, "Error should not have been thrown for a bad tar file")
+	assert.NoError(t, err, "Error should not have been thrown for a bad tar file")
 
 	//Test HandleChaincodeDefinition with a nil chaincodeDef
 	err = commonStorageDB.HandleChaincodeDeploy(nil, dbArtifactsTarBytes)
-	testutil.AssertError(t, err, "Error should have been thrown for a nil chaincodeDefinition")
+	assert.Error(t, err, "Error should have been thrown for a nil chaincodeDefinition")
 
 	// Create a tar file for test with 2 index definitions - one of them being errorneous
 	badSyntaxFileContent := `{"index":{"fields": This is a bad json}`
 	dbArtifactsTarBytes = testutil.CreateTarBytesForTest(
 		[]*testutil.TarFileEntry{
-			{"META-INF/statedb/couchdb/indexes/indexSizeSortName.json", `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`},
-			{"META-INF/statedb/couchdb/indexes/badSyntax.json", badSyntaxFileContent},
+			{Name: "META-INF/statedb/couchdb/indexes/indexSizeSortName.json", Body: `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`},
+			{Name: "META-INF/statedb/couchdb/indexes/badSyntax.json", Body: badSyntaxFileContent},
 		},
 	)
 
@@ -535,16 +537,59 @@ func testHandleChainCodeDeploy(t *testing.T, env TestEnv) {
 	assert.NoError(t, err)
 
 	// There should be 1 entry
-	assert.Equal(t, 1, len(fileEntries))
+	assert.Len(t, fileEntries, 1)
 
 	err = commonStorageDB.HandleChaincodeDeploy(chaincodeDef, dbArtifactsTarBytes)
 	assert.NoError(t, err)
 
 }
 
+func TestMetadataRetrieval(t *testing.T) {
+	for _, env := range testEnvs {
+		t.Run(env.GetName(), func(t *testing.T) {
+			testMetadataRetrieval(t, env)
+		})
+	}
+}
+
+func testMetadataRetrieval(t *testing.T, env TestEnv) {
+	env.Init(t)
+	defer env.Cleanup()
+	db := env.GetDBHandle("test-ledger-id")
+
+	updates := NewUpdateBatch()
+	updates.PubUpdates.PutValAndMetadata("ns1", "key1", []byte("value1"), []byte("metadata1"), version.NewHeight(1, 1))
+	updates.PubUpdates.PutValAndMetadata("ns1", "key2", []byte("value2"), nil, version.NewHeight(1, 2))
+	updates.PubUpdates.PutValAndMetadata("ns2", "key3", []byte("value3"), nil, version.NewHeight(1, 3))
+
+	putPvtUpdatesWithMetadata(t, updates, "ns1", "coll1", "key1", []byte("pvt_value1"), []byte("metadata1"), version.NewHeight(1, 4))
+	putPvtUpdatesWithMetadata(t, updates, "ns1", "coll1", "key2", []byte("pvt_value2"), nil, version.NewHeight(1, 5))
+	putPvtUpdatesWithMetadata(t, updates, "ns2", "coll1", "key3", []byte("pvt_value3"), nil, version.NewHeight(1, 6))
+	db.ApplyPrivacyAwareUpdates(updates, version.NewHeight(2, 6))
+
+	vm, _ := db.GetStateMetadata("ns1", "key1")
+	assert.Equal(t, vm, []byte("metadata1"))
+	vm, _ = db.GetStateMetadata("ns1", "key2")
+	assert.Nil(t, vm)
+	vm, _ = db.GetStateMetadata("ns2", "key3")
+	assert.Nil(t, vm)
+
+	vm, _ = db.GetPrivateDataMetadataByHash("ns1", "coll1", util.ComputeStringHash("key1"))
+	assert.Equal(t, vm, []byte("metadata1"))
+	vm, _ = db.GetPrivateDataMetadataByHash("ns1", "coll1", util.ComputeStringHash("key2"))
+	assert.Nil(t, vm)
+	vm, _ = db.GetPrivateDataMetadataByHash("ns2", "coll1", util.ComputeStringHash("key3"))
+	assert.Nil(t, vm)
+}
+
 func putPvtUpdates(t *testing.T, updates *UpdateBatch, ns, coll, key string, value []byte, ver *version.Height) {
 	updates.PvtUpdates.Put(ns, coll, key, value, ver)
 	updates.HashUpdates.Put(ns, coll, util.ComputeStringHash(key), util.ComputeHash(value), ver)
+}
+
+func putPvtUpdatesWithMetadata(t *testing.T, updates *UpdateBatch, ns, coll, key string, value []byte, metadata []byte, ver *version.Height) {
+	updates.PvtUpdates.Put(ns, coll, key, value, ver)
+	updates.HashUpdates.PutValHashAndMetadata(ns, coll, util.ComputeStringHash(key), util.ComputeHash(value), metadata, ver)
 }
 
 func deletePvtUpdates(t *testing.T, updates *UpdateBatch, ns, coll, key string, ver *version.Height) {

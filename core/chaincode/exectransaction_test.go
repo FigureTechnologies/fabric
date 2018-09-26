@@ -8,6 +8,7 @@ package chaincode
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -63,7 +64,6 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -304,7 +304,11 @@ func endTxSimulation(chainID string, ccid *pb.ChaincodeID, txsim ledger.TxSimula
 			}
 
 			//create the block with 1 transaction
-			block := common.NewBlock(blockNumber, []byte{})
+			bcInfo, err := lgr.GetBlockchainInfo()
+			if err != nil {
+				return err
+			}
+			block := common.NewBlock(blockNumber, bcInfo.CurrentBlockHash)
 			block.Data.Data = [][]byte{envBytes}
 			txsFilter := cut.NewTxValidationFlagsSetValue(len(block.Data.Data), pb.TxValidationCode_VALID)
 			block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter

@@ -8,6 +8,7 @@ package comm
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
@@ -24,17 +25,17 @@ import (
 	proto "github.com/hyperledger/fabric/protos/gossip"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )
 
 const (
-	defDialTimeout  = time.Second * time.Duration(3)
-	defConnTimeout  = time.Second * time.Duration(2)
-	defRecvBuffSize = 20
-	defSendBuffSize = 20
+	handshakeTimeout = time.Second * time.Duration(10)
+	defDialTimeout   = time.Second * time.Duration(3)
+	defConnTimeout   = time.Second * time.Duration(2)
+	defRecvBuffSize  = 20
+	defSendBuffSize  = 20
 )
 
 // SecurityAdvisor defines an external auxiliary object
@@ -305,7 +306,9 @@ func (c *commImpl) Handshake(remotePeer *RemotePeer) (api.PeerIdentityType, erro
 		return nil, err
 	}
 
-	stream, err := cl.GossipStream(context.Background())
+	ctx, cancel = context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	stream, err := cl.GossipStream(ctx)
 	if err != nil {
 		return nil, err
 	}

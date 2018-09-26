@@ -159,7 +159,7 @@ func TestGenerateDockerfile(t *testing.T) {
 }
 
 func TestGenerateDockerBuild(t *testing.T) {
-	t.Skip("Will re-enable once fabric-chaincode-java CI will produce and publish javaenv docker image")
+	t.Skip()
 	platform := java.Platform{}
 	ccSpec := &pb.ChaincodeSpec{
 		Type:        pb.ChaincodeSpec_JAVA,

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package admin
 
 import (
+	"context"
 	"strings"
 
 	"github.com/golang/protobuf/ptypes/empty"
@@ -15,7 +16,6 @@ import (
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 	"go.uber.org/zap/zapcore"
-	"golang.org/x/net/context"
 )
 
 var logger = flogging.MustGetLogger("server")
@@ -91,7 +91,7 @@ func (s *ServerAdmin) SetModuleLogLevel(ctx context.Context, env *common.Envelop
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	err = flogging.SetModuleLevel(request.LogModule, request.LogLevel)
+	err = flogging.SetModuleLevels(request.LogModule, request.LogLevel)
 	logResponse := &pb.LogLevelResponse{LogModule: request.LogModule, LogLevel: strings.ToUpper(request.LogLevel)}
 	return logResponse, err
 }

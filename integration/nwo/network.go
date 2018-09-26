@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package nwo
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -30,7 +31,7 @@ import (
 	"github.com/tedsuo/ifrit"
 	"github.com/tedsuo/ifrit/ginkgomon"
 	"github.com/tedsuo/ifrit/grouper"
-	yaml "gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v2"
 )
 
 // Organization models information about an Organization. It includes
@@ -307,9 +308,9 @@ func (n *Network) WritePeerConfig(p *Peer, config *fabricconfig.Core) {
 	Expect(err).NotTo(HaveOccurred())
 }
 
-// PeerUserMSPDir returns the path to the MSP directory containing the
+// peerUserCrpytoDir returns the path to the directory containing the
 // certificates and keys for the specified user of the peer.
-func (n *Network) PeerUserMSPDir(p *Peer, user string) string {
+func (n *Network) peerUserCrpytoDir(p *Peer, user, cryptoMaterialType string) string {
 	org := n.Organization(p.Organization)
 	Expect(org).NotTo(BeNil())
 
@@ -320,8 +321,20 @@ func (n *Network) PeerUserMSPDir(p *Peer, user string) string {
 		org.Domain,
 		"users",
 		fmt.Sprintf("%s@%s", user, org.Domain),
-		"msp",
+		cryptoMaterialType,
 	)
+}
+
+// PeerUserMSPDir returns the path to the MSP directory containing the
+// certificates and keys for the specified user of the peer.
+func (n *Network) PeerUserMSPDir(p *Peer, user string) string {
+	return n.peerUserCrpytoDir(p, user, "msp")
+}
+
+// PeerUserTLSDir returns the path to the TLS directory containing the
+// certificates and keys for the specified user of the peer.
+func (n *Network) PeerUserTLSDir(p *Peer, user string) string {
+	return n.peerUserCrpytoDir(p, user, "tls")
 }
 
 // PeerUserCert returns the path to the certificate for the specified user in
@@ -356,8 +369,8 @@ func (n *Network) PeerUserKey(p *Peer, user string) string {
 	return filepath.Join(keystore, keys[0].Name())
 }
 
-// PeerLocalMSPDir returns the path to the local MSP directory for the peer.
-func (n *Network) PeerLocalMSPDir(p *Peer) string {
+// peerLocalCryptoDir returns the path to the local crypto directory for the peer.
+func (n *Network) peerLocalCryptoDir(p *Peer, cryptoType string) string {
 	org := n.Organization(p.Organization)
 	Expect(org).NotTo(BeNil())
 
@@ -368,8 +381,18 @@ func (n *Network) PeerLocalMSPDir(p *Peer) string {
 		org.Domain,
 		"peers",
 		fmt.Sprintf("%s.%s", p.Name, org.Domain),
-		"msp",
+		cryptoType,
 	)
+}
+
+// PeerLocalMSPDir returns the path to the local MSP directory for the peer.
+func (n *Network) PeerLocalMSPDir(p *Peer) string {
+	return n.peerLocalCryptoDir(p, "msp")
+}
+
+// PeerLocalTLSDir returns the path to the local TLS directory for the peer.
+func (n *Network) PeerLocalTLSDir(p *Peer) string {
+	return n.peerLocalCryptoDir(p, "tls")
 }
 
 // PeerCert returns the path to the peer's certificate.
@@ -407,9 +430,9 @@ func (n *Network) OrdererOrgMSPDir(o *Organization) string {
 	)
 }
 
-// OrdererLocalMSPDir returns the path to the local MSP directory for the
+// ordererLocalCryptoDir returns the path to the local crypto directory for the
 // Orderer.
-func (n *Network) OrdererLocalMSPDir(o *Orderer) string {
+func (n *Network) ordererLocalCryptoDir(o *Orderer, cryptoType string) string {
 	org := n.Organization(o.Organization)
 	Expect(org).NotTo(BeNil())
 
@@ -420,8 +443,20 @@ func (n *Network) OrdererLocalMSPDir(o *Orderer) string {
 		org.Domain,
 		"orderers",
 		fmt.Sprintf("%s.%s", o.Name, org.Domain),
-		"msp",
+		cryptoType,
 	)
+}
+
+// OrdererLocalMSPDir returns the path to the local MSP directory for the
+// Orderer.
+func (n *Network) OrdererLocalMSPDir(o *Orderer) string {
+	return n.ordererLocalCryptoDir(o, "msp")
+}
+
+// OrdererLocalTLSDir returns the path to the local TLS directory for the
+// Orderer.
+func (n *Network) OrdererLocalTLSDir(o *Orderer) string {
+	return n.ordererLocalCryptoDir(o, "tls")
 }
 
 // ProfileForChannel gets the configtxgen profile name associated with the
@@ -433,6 +468,16 @@ func (n *Network) ProfileForChannel(channelName string) string {
 		}
 	}
 	return ""
+}
+
+// CACertsBundlePath returns the path to the bundle of CA certificates for the
+// network. This bundle is used when connecting to peers.
+func (n *Network) CACertsBundlePath() string {
+	return filepath.Join(
+		n.RootDir,
+		"crypto",
+		"ca-certs.pem",
+	)
 }
 
 // GenerateConfigTree generates the configuration documents required to
@@ -512,6 +557,40 @@ func (n *Network) Bootstrap() {
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	}
+
+	n.concatenateTLSCACertificates()
+}
+
+// concatenateTLSCACertificates concatenates all TLS CA certificates into a
+// single file to be used by peer CLI.
+func (n *Network) concatenateTLSCACertificates() {
+	bundle := &bytes.Buffer{}
+	for _, tlsCertPath := range n.listTLSCACertificates() {
+		certBytes, err := ioutil.ReadFile(tlsCertPath)
+		Expect(err).NotTo(HaveOccurred())
+		bundle.Write(certBytes)
+	}
+	err := ioutil.WriteFile(n.CACertsBundlePath(), bundle.Bytes(), 0660)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+// listTLSCACertificates returns the paths of all TLS CA certificates in the
+// network, across all organizations.
+func (n *Network) listTLSCACertificates() []string {
+	fileName2Path := make(map[string]string)
+	filepath.Walk(filepath.Join(n.RootDir, "crypto"), func(path string, info os.FileInfo, err error) error {
+		// File starts with "tlsca" and has "-cert.pem" in it
+		if strings.HasPrefix(info.Name(), "tlsca") && strings.Contains(info.Name(), "-cert.pem") {
+			fileName2Path[info.Name()] = path
+		}
+		return nil
+	})
+
+	var tlsCACertificates []string
+	for _, path := range fileName2Path {
+		tlsCACertificates = append(tlsCACertificates, path)
+	}
+	return tlsCACertificates
 }
 
 // Cleanup attempts to cleanup docker related artifacts that may
@@ -692,6 +771,7 @@ func (n *Network) ConfigTxGen(command Command) (*gexec.Session, error) {
 // Discover starts a gexec.Session for the provided discover command.
 func (n *Network) Discover(command Command) (*gexec.Session, error) {
 	cmd := NewCommand(n.Components.Discover(), command)
+	cmd.Args = append(cmd.Args, "--peerTLSCA", n.CACertsBundlePath())
 	return n.StartSession(cmd, command.SessionName())
 }
 
@@ -848,8 +928,33 @@ func (n *Network) NetworkGroupRunner() ifrit.Runner {
 
 func (n *Network) peerCommand(command Command, env ...string) *exec.Cmd {
 	cmd := NewCommand(n.Components.Peer(), command)
-	cmd.Env = append(env, cmd.Env...)
+	cmd.Env = append(cmd.Env, env...)
+	if ConnectsToOrderer(command) {
+		cmd.Args = append(cmd.Args, "--tls")
+		cmd.Args = append(cmd.Args, "--cafile", n.CACertsBundlePath())
+	}
+
+	// In case we have a peer invoke with multiple certificates,
+	// we need to mimic the correct peer CLI usage,
+	// so we count the number of --peerAddresses usages
+	// we have, and add the same (concatenated TLS CA certificates file)
+	// the same number of times to bypass the peer CLI sanity checks
+	requiredPeerAddresses := flagCount("--peerAddresses", cmd.Args)
+	for i := 0; i < requiredPeerAddresses; i++ {
+		cmd.Args = append(cmd.Args, "--tlsRootCertFiles")
+		cmd.Args = append(cmd.Args, n.CACertsBundlePath())
+	}
 	return cmd
+}
+
+func flagCount(flag string, args []string) int {
+	var c int
+	for _, arg := range args {
+		if arg == flag {
+			c++
+		}
+	}
+	return c
 }
 
 // PeerAdminSession starts a gexec.Session as a peer admin for the provided

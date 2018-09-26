@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package deliverclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -20,7 +21,6 @@ import (
 	"github.com/hyperledger/fabric/gossip/util"
 	"github.com/hyperledger/fabric/protos/orderer"
 	"github.com/spf13/viper"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -259,8 +259,8 @@ func DefaultConnectionFactory(channelID string) func(endpoint string) (*grpc.Cli
 		} else {
 			dialOpts = append(dialOpts, grpc.WithInsecure())
 		}
-		ctx := context.Background()
-		ctx, _ = context.WithTimeout(ctx, getConnectionTimeout())
+		ctx, cancel := context.WithTimeout(context.Background(), getConnectionTimeout())
+		defer cancel()
 		return grpc.DialContext(ctx, endpoint, dialOpts...)
 	}
 }
