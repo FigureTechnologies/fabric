@@ -24,10 +24,8 @@ import (
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/core/container"
 	"github.com/hyperledger/fabric/core/container/ccintf"
-	appv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 // ContainerType is the string which the kuberentes container type
@@ -119,20 +117,16 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 func (api *KubernetesAPI) Start(ctxt context.Context, ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
-	// Clean up any existing deployments
-	err := api.stopAllInternal(ccid)
+	// Clean up any existing deployments (why do this?)
+	api.stopAllInternal(ccid)
+
+	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
-		kubernetesLogger.Error("Could not stop/remove existing deployments.", err)
+		kubernetesLogger.Errorf("start - cannot create chaincode deploy %s", err)
 		return err
 	}
 
-	podInstance, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
-	if err != nil {
-		kubernetesLogger.Errorf("start - cannot create chaincode pod %s", err)
-		return err
-	}
-
-	kubernetesLogger.Infof("Started chaincode peer pod %s", podInstance.GetName())
+	kubernetesLogger.Infof("Started chaincode peer deployment %s", deploy.GetName())
 	return nil
 }
 
@@ -142,7 +136,7 @@ func (api *KubernetesAPI) Stop(ctxt context.Context, ccid ccintf.CCID, timeout u
 	return api.stopAllInternal(ccid)
 }
 
-func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*appv1.Deployment, error) {
+func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*apiv1.Pod, error) {
 
 	podName := api.GetPodName(ccid)
 	kubernetesLogger.Info("Starting chaincode", podName)
@@ -160,56 +154,54 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 		envvars = append(envvars, apiv1.EnvVar{Name: ss[0], Value: ss[1]})
 	}
 
-	replicas := int32(1)
-	deployment := &appv1.Deployment{
+	weight := int32(50)
+	labelExp, err := metav1.ParseToLabelSelector(fmt.Sprintf("Name == %s", api.PeerID))
+	pod := &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: api.Namespace,
+			Name: podName,
 			Labels: map[string]string{
 				"peer-owner": api.PeerID,
 				"ccname":     ccid.Name,
 				"ccver":      ccid.Version,
+				"cc":         podName,
 			},
 		},
-		Spec: appv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: metav1.SetAsLabelSelector(labels.Set{
-				"cc": podName,
-			}),
-			Template: apiv1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: podName,
-					Labels: map[string]string{
-						"peer-owner": api.PeerID,
-						"ccname":     ccid.Name,
-						"ccver":      ccid.Version,
-						"cc":         podName,
+		Spec: apiv1.PodSpec{
+			RestartPolicy: "Never", // If we exit for any reason rely on the Peer to reschedule.
+			Containers: []apiv1.Container{
+				{
+					Name:  "fabric-chaincode-mycc-container",
+					Image: api.GetChainCodeImageName(ccid),
+					Args:  args,
+					Env:   envvars,
+					VolumeMounts: []apiv1.VolumeMount{
+						{
+							Name:      "uploadedfiles-volume",
+							MountPath: mountPoint,
+						},
 					},
 				},
-				Spec: apiv1.PodSpec{
-					Containers: []apiv1.Container{
+			},
+			Affinity: &apiv1.Affinity{
+				PodAffinity: &apiv1.PodAffinity{
+					PreferredDuringSchedulingIgnoredDuringExecution: []apiv1.WeightedPodAffinityTerm{
 						{
-							Name:    "fabric-chaincode-mycc-container",
-							Image:   api.GetChainCodeImageName(ccid),
-							Command: args,
-							Env:     envvars,
-							VolumeMounts: []apiv1.VolumeMount{
-								{
-									Name:      "uploadedfiles-volume",
-									MountPath: mountPoint,
-								},
+							Weight: weight,
+							PodAffinityTerm: apiv1.PodAffinityTerm{
+								LabelSelector: labelExp,
+								TopologyKey:   "kubernetes.io/hostname",
 							},
 						},
 					},
-					Volumes: []apiv1.Volume{
-						{
-							Name: "uploadedfiles-volume",
-							VolumeSource: apiv1.VolumeSource{
-								ConfigMap: &apiv1.ConfigMapVolumeSource{
-									LocalObjectReference: apiv1.LocalObjectReference{
-										Name: configMap.Name,
-									},
-								},
+				},
+			},
+			Volumes: []apiv1.Volume{
+				{
+					Name: "uploadedfiles-volume",
+					VolumeSource: apiv1.VolumeSource{
+						ConfigMap: &apiv1.ConfigMapVolumeSource{
+							LocalObjectReference: apiv1.LocalObjectReference{
+								Name: configMap.Name,
 							},
 						},
 					},
@@ -217,8 +209,9 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			},
 		},
 	}
+	// Not already deployed so create it.
 	kubernetesLogger.Info("Creating chaincode peer pod deployment")
-	return api.client.AppsV1().Deployments(api.Namespace).Create(deployment)
+	return api.client.Core().Pods(api.Namespace).Create(pod)
 }
 
 // createChainCodeFilesConfigMap return the mount point to use with the create config map or an error if it could not be created.
@@ -299,14 +292,14 @@ func (api *KubernetesAPI) extractCommonRoot(filesToUpload map[string][]byte) (st
 // stopAllInternal stops any running pods associated with this peer and the given chaincode.
 func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 	grace := int64(0)
-	ccpods, err := api.FindPeerCCPod(ccid)
+	ccPods, err := api.FindPeerCCPods(ccid)
 	if err != nil {
-		kubernetesLogger.Errorf("stop all - cannot search for peer chaincode pods %s", err)
+		kubernetesLogger.Errorf("stop all - cannot search for existing cc pods %s", err)
 		return err
 	}
-	for _, pod := range ccpods.Items {
+	for _, pod := range ccPods.Items {
 		kubernetesLogger.Info("Removing existing chaincode pod %s", pod.Name)
-		err := api.client.CoreV1().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
+		err := api.client.Core().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
 			GracePeriodSeconds: &grace,
 		})
 		if err != nil {
@@ -316,8 +309,8 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 	return api.deleteChainCodeFilesConfigMap(api.GetPodName(ccid))
 }
 
-// FindPeerCCPod looks for pods associated with this peer assigned to the given chaincode
-func (api *KubernetesAPI) FindPeerCCPod(ccid ccintf.CCID) (*appv1.DeploymentList, error) {
+// FindPeerCCPods looks for pods associated with this peer assigned to the given chaincode
+func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, error) {
 
 	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
 
@@ -325,11 +318,10 @@ func (api *KubernetesAPI) FindPeerCCPod(ccid ccintf.CCID) (*appv1.DeploymentList
 		LabelSelector: labelExp,
 	}
 
-	//return api.client.Core().Pods(api.Namespace).List(listOptions)
-	return api.client.AppsV1().Deployments(api.Namespace).List(listOptions)
+	return api.client.Core().Pods(api.Namespace).List(listOptions)
 }
 
-// GetPodName composes a name for a chaincode pod based on available
+// GetPodName composes a name for a chaincode pod based on available metadata
 func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
 	name := ccid.GetName()
 
