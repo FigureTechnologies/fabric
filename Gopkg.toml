@@ -46,7 +46,7 @@ noverify = [
 
 [[constraint]]
   name = "k8s.io/client-go"
-  version = "~8.0.0"
+  version = "kubernetes-1.11.0"
 
 [[constraint]]
   name = "github.com/golang/protobuf"
