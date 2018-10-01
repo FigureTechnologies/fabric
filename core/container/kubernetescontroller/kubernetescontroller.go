@@ -159,6 +159,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 		ObjectMeta: metav1.ObjectMeta{
 			Name: podName,
 			Labels: map[string]string{
+				"service":    "peer-chaincode",
 				"peer-owner": api.PeerID,
 				"ccname":     ccid.Name,
 				"ccver":      ccid.Version,
@@ -247,7 +248,7 @@ func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToU
 	return rootPath, configmap, err
 }
 
-// deleteChainCodeFilesConfigMap removes the configuration map files assocaited with the peer chaincode deployment
+// deleteChainCodeFilesConfigMap removes the configuration map files associate with the peer chaincode deployment
 func (api *KubernetesAPI) deleteChainCodeFilesConfigMap(podName string) error {
 	opt := metav1.DeleteOptions{}
 	kubernetesLogger.Infof("Removing config map '%s' for peer chaincode deployment", podName)
@@ -297,7 +298,7 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 		return err
 	}
 	for _, pod := range ccPods.Items {
-		kubernetesLogger.Info("Removing existing chaincode pod %s", pod.Name)
+		kubernetesLogger.Infof("Removing existing chaincode pod %s", pod.Name)
 		err := api.client.Core().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
 			GracePeriodSeconds: &grace,
 		})
