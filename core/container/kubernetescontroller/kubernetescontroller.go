@@ -159,6 +159,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 		ObjectMeta: metav1.ObjectMeta{
 			Name: podName,
 			Labels: map[string]string{
+				"service":    "peer-chaincode",
 				"peer-owner": api.PeerID,
 				"ccname":     ccid.Name,
 				"ccver":      ccid.Version,
