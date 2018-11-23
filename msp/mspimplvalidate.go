@@ -216,7 +216,7 @@ func (msp *bccspmsp) getValidityOptsForCert(cert *x509.Certificate) x509.VerifyO
 	tempOpts.DNSName = msp.opts.DNSName
 	tempOpts.Intermediates = msp.opts.Intermediates
 	tempOpts.KeyUsages = msp.opts.KeyUsages
-	tempOpts.CurrentTime = cert.NotBefore.Add(time.Second)
+	tempOpts.CurrentTime = cert.NotBefore.Add(time.Hour)
 
 	return tempOpts
 }

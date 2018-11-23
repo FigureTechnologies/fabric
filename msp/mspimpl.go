@@ -10,9 +10,11 @@ import (
 	"bytes"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/bccsp"
@@ -135,16 +137,22 @@ func (msp *bccspmsp) getCertFromPem(idBytes []byte) (*x509.Certificate, error) {
 	// Decode the pem bytes
 	pemCert, _ := pem.Decode(idBytes)
 	if pemCert == nil {
-		return nil, errors.Errorf("getCertFromPem error: could not decode pem bytes [%v]", idBytes)
+		return nil, errors.Errorf("getCertFromPem error: could not decode pem bytes [%s]", base64.StdEncoding.EncodeToString(idBytes))
+	}
+
+	// Return a more useful error message here.
+	if pemCert.Type == "PRIVATE KEY" {
+		return nil, errors.Errorf("Private Key found, certificate expected.")
 	}
 
 	// get a cert
 	var cert *x509.Certificate
 	cert, err := x509.ParseCertificate(pemCert.Bytes)
 	if err != nil {
+		mspLogger.Errorf("Error parsing certificate from PEM of Type [%s] given bytes [%v]", pemCert.Type, pemCert.Bytes)
 		return nil, errors.Wrap(err, "getCertFromPem error: failed to parse x509 cert")
 	}
-
+	mspLogger.Infof("Loaded certificate from pem [%s (%s - %s)]", cert.Subject, cert.NotBefore.Format(time.RFC1123), cert.NotAfter.Format(time.RFC1123))
 	return cert, nil
 }
 
@@ -158,12 +166,12 @@ func (msp *bccspmsp) getIdentityFromConf(idBytes []byte) (Identity, bccsp.Key, e
 	// get the public key in the right format
 	certPubK, err := msp.bccsp.KeyImport(cert, &bccsp.X509PublicKeyImportOpts{Temporary: true})
 
-	mspId, err := newIdentity(cert, certPubK, msp)
+	mspID, err := newIdentity(cert, certPubK, msp)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return mspId, certPubK, nil
+	return mspID, certPubK, nil
 }
 
 func (msp *bccspmsp) getSigningIdentityFromConf(sidInfo *m.SigningIdentityInfo) (SigningIdentity, error) {
@@ -603,7 +611,7 @@ func (msp *bccspmsp) getUniqueValidationChain(cert *x509.Certificate, opts x509.
 	}
 	validationChains, err := cert.Verify(opts)
 	if err != nil {
-		return nil, errors.WithMessage(err, "the supplied identity is not valid")
+		return nil, errors.WithMessage(err, "the supplied identity "+cert.Subject+" is not valid")
 	}
 
 	// we only support a single validation chain;
