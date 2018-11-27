@@ -611,7 +611,7 @@ func (msp *bccspmsp) getUniqueValidationChain(cert *x509.Certificate, opts x509.
 	}
 	validationChains, err := cert.Verify(opts)
 	if err != nil {
-		return nil, errors.WithMessage(err, "the supplied identity "+cert.Subject+" is not valid")
+		return nil, errors.WithMessage(err, "the supplied identity "+cert.Subject.CommonName+" is not valid")
 	}
 
 	// we only support a single validation chain;
