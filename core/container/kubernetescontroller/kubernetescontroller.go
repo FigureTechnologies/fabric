@@ -8,6 +8,7 @@ SPDX-License-Identifier: BSD-3-Clause-Attribution
 package kubernetescontroller
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -43,8 +44,9 @@ type getClient func() (*kubernetes.Clientset, error)
 type KubernetesAPI struct {
 	client *kubernetes.Clientset
 
-	PeerID    string
-	Namespace string
+	PeerID       string
+	Namespace    string
+	BuildMetrics *BuildMetrics
 }
 
 // NewKubernetesAPI creates an instance using the environmental Kubernetes configuration
@@ -133,6 +135,12 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
 	// Remove any existing deployments by matching labels
 	return api.stopAllInternal(ccid)
+}
+
+// HealthCheck checks api call used by docker for ensuring endpoint is available...
+func (vm *KubernetesAPI) HealthCheck(ctx context.Context) error {
+	// Decide what kind of check we want to do here... nothing for now.
+	return nil
 }
 
 func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*apiv1.Pod, error) {
