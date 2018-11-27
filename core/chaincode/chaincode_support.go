@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
@@ -54,6 +55,8 @@ type ChaincodeSupport struct {
 	SystemCCProvider sysccprovider.SystemChaincodeProvider
 	Lifecycle        Lifecycle
 	appConfig        ApplicationConfigRetriever
+	HandlerMetrics   *HandlerMetrics
+	LaunchMetrics    *LaunchMetrics
 }
 
 // NewChaincodeSupport creates a new ChaincodeSupport instance.
@@ -70,6 +73,7 @@ func NewChaincodeSupport(
 	SystemCCProvider sysccprovider.SystemChaincodeProvider,
 	platformRegistry *platforms.Registry,
 	appConfig ApplicationConfigRetriever,
+	metricsProvider metrics.Provider,
 ) *ChaincodeSupport {
 	cs := &ChaincodeSupport{
 		UserRunsCC:       userRunsCC,
@@ -80,6 +84,8 @@ func NewChaincodeSupport(
 		SystemCCProvider: SystemCCProvider,
 		Lifecycle:        lifecycle,
 		appConfig:        appConfig,
+		HandlerMetrics:   NewHandlerMetrics(metricsProvider),
+		LaunchMetrics:    NewLaunchMetrics(metricsProvider),
 	}
 
 	// Keep TestQueries working
@@ -105,12 +111,13 @@ func NewChaincodeSupport(
 		Registry:        cs.HandlerRegistry,
 		PackageProvider: packageProvider,
 		StartupTimeout:  config.StartupTimeout,
+		Metrics:         cs.LaunchMetrics,
 	}
 
 	return cs
 }
 
-// LaunchForInit bypasses getting the chaincode spec from the LSCC table
+// LaunchInit bypasses getting the chaincode spec from the LSCC table
 // as in the case of v1.0-v1.2 lifecycle, the chaincode will not yet be
 // defined in the LSCC table
 func (cs *ChaincodeSupport) LaunchInit(ccci *ccprovider.ChaincodeContainerInfo) error {
@@ -177,6 +184,7 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		UUIDGenerator:              UUIDGeneratorFunc(util.GenerateUUID),
 		LedgerGetter:               peer.Default,
 		AppConfig:                  cs.appConfig,
+		Metrics:                    cs.HandlerMetrics,
 	}
 
 	return handler.ProcessStream(stream)

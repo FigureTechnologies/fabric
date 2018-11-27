@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package kvledger
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -41,6 +40,7 @@ type kvLedger struct {
 	historyDB              historydb.HistoryDB
 	configHistoryRetriever ledger.ConfigHistoryRetriever
 	blockAPIsRWLock        *sync.RWMutex
+	stats                  *ledgerStats
 }
 
 // NewKVLedger constructs new `KVLedger`
@@ -52,10 +52,10 @@ func newKVLedger(
 	configHistoryMgr confighistory.Mgr,
 	stateListeners []ledger.StateListener,
 	bookkeeperProvider bookkeeping.Provider,
-	ccInfoProvider ledger.DeployedChaincodeInfoProvider) (*kvLedger, error) {
-
+	ccInfoProvider ledger.DeployedChaincodeInfoProvider,
+	stats *ledgerStats,
+) (*kvLedger, error) {
 	logger.Debugf("Creating KVLedger ledgerID=%s: ", ledgerID)
-	stateListeners = append(stateListeners, configHistoryMgr)
 	// Create a kvLedger for this chain/ledger, which encasulates the underlying
 	// id store, blockstore, txmgr (state database), history database
 	l := &kvLedger{ledgerID: ledgerID, blockStore: blockStore, historyDB: historyDB, blockAPIsRWLock: &sync.RWMutex{}}
@@ -68,8 +68,8 @@ func newKVLedger(
 	if ccEventListener != nil {
 		cceventmgmt.GetMgr().Register(ledgerID, ccEventListener)
 	}
-	btlPolicy := pvtdatapolicy.NewBTLPolicy(l)
-	if err := l.initTxMgr(versionedDB, stateListeners, btlPolicy, bookkeeperProvider); err != nil {
+	btlPolicy := pvtdatapolicy.ConstructBTLPolicy(&collectionInfoRetriever{l, ccInfoProvider})
+	if err := l.initTxMgr(versionedDB, stateListeners, btlPolicy, bookkeeperProvider, ccInfoProvider); err != nil {
 		return nil, err
 	}
 	l.initBlockStore(btlPolicy)
@@ -78,13 +78,21 @@ func newKVLedger(
 		panic(errors.WithMessage(err, "error during state DB recovery"))
 	}
 	l.configHistoryRetriever = configHistoryMgr.GetRetriever(ledgerID, l)
+
+	info, err := l.GetBlockchainInfo()
+	if err != nil {
+		return nil, err
+	}
+	// initialize stat with the current height
+	stats.updateBlockchainHeight(info.Height)
+	l.stats = stats
 	return l, nil
 }
 
 func (l *kvLedger) initTxMgr(versionedDB privacyenabledstate.DB, stateListeners []ledger.StateListener,
-	btlPolicy pvtdatapolicy.BTLPolicy, bookkeeperProvider bookkeeping.Provider) error {
+	btlPolicy pvtdatapolicy.BTLPolicy, bookkeeperProvider bookkeeping.Provider, ccInfoProvider ledger.DeployedChaincodeInfoProvider) error {
 	var err error
-	l.txtmgmt, err = lockbasedtxmgr.NewLockBasedTxMgr(l.ledgerID, versionedDB, stateListeners, btlPolicy, bookkeeperProvider)
+	l.txtmgmt, err = lockbasedtxmgr.NewLockBasedTxMgr(l.ledgerID, versionedDB, stateListeners, btlPolicy, bookkeeperProvider, ccInfoProvider)
 	return err
 }
 
@@ -256,13 +264,13 @@ func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) er
 	block := pvtdataAndBlock.Block
 	blockNo := pvtdataAndBlock.Block.Header.Number
 
-	startStateValidation := time.Now()
+	startBlockProcessing := time.Now()
 	logger.Debugf("[%s] Validating state for block [%d]", l.ledgerID, blockNo)
 	err = l.txtmgmt.ValidateAndPrepare(pvtdataAndBlock, true)
 	if err != nil {
 		return err
 	}
-	elapsedStateValidation := time.Since(startStateValidation) / time.Millisecond // duration in ms
+	elapsedBlockProcessing := time.Since(startBlockProcessing)
 
 	startCommitBlockStorage := time.Now()
 	logger.Debugf("[%s] Committing block [%d] to storage", l.ledgerID, blockNo)
@@ -271,14 +279,14 @@ func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) er
 	if err = l.blockStore.CommitWithPvtData(pvtdataAndBlock); err != nil {
 		return err
 	}
-	elapsedCommitBlockStorage := time.Since(startCommitBlockStorage) / time.Millisecond // duration in ms
+	elapsedCommitBlockStorage := time.Since(startCommitBlockStorage)
 
 	startCommitState := time.Now()
 	logger.Debugf("[%s] Committing block [%d] transactions to state database", l.ledgerID, blockNo)
 	if err = l.txtmgmt.Commit(); err != nil {
 		panic(errors.WithMessage(err, "error during commit to txmgr"))
 	}
-	elapsedCommitState := time.Since(startCommitState) / time.Millisecond // duration in ms
+	elapsedCommitState := time.Since(startCommitState)
 
 	// History database could be written in parallel with state and/or async as a future optimization,
 	// although it has not been a bottleneck...no need to clutter the log with elapsed duration.
@@ -289,13 +297,33 @@ func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) er
 		}
 	}
 
-	elapsedCommitWithPvtData := time.Since(startStateValidation) / time.Millisecond // total duration in ms
+	elapsedCommitWithPvtData := time.Since(startBlockProcessing)
 
 	logger.Infof("[%s] Committed block [%d] with %d transaction(s) in %dms (state_validation=%dms block_commit=%dms state_commit=%dms)",
-		l.ledgerID, block.Header.Number, len(block.Data.Data), elapsedCommitWithPvtData,
-		elapsedStateValidation, elapsedCommitBlockStorage, elapsedCommitState)
-
+		l.ledgerID, block.Header.Number, len(block.Data.Data),
+		elapsedCommitWithPvtData/time.Millisecond,
+		elapsedBlockProcessing/time.Millisecond,
+		elapsedCommitBlockStorage/time.Millisecond,
+		elapsedCommitState/time.Millisecond,
+	)
+	l.updateBlockStats(blockNo,
+		elapsedBlockProcessing,
+		elapsedCommitBlockStorage,
+		elapsedCommitState,
+	)
 	return nil
+}
+
+func (l *kvLedger) updateBlockStats(
+	blockNum uint64,
+	blockProcessingTime time.Duration,
+	blockstorageCommitTime time.Duration,
+	statedbCommitTime time.Duration,
+) {
+	l.stats.updateBlockchainHeight(blockNum + 1)
+	l.stats.updateBlockProcessingTime(blockProcessingTime)
+	l.stats.updateBlockstorageCommitTime(blockstorageCommitTime)
+	l.stats.updateStatedbCommitTime(statedbCommitTime)
 }
 
 // GetMissingPvtDataInfoForMostRecentBlocks returns the missing private data information for the
@@ -338,8 +366,30 @@ func (l *kvLedger) GetConfigHistoryRetriever() (ledger.ConfigHistoryRetriever, e
 	return l.configHistoryRetriever, nil
 }
 
+// TODO: FAB-12849 rename CommitPvtData() ledger API to CommitPvtDataOfOldBlocks()
 func (l *kvLedger) CommitPvtData(pvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
-	return nil, fmt.Errorf("not yet implemented")
+	validPvtData, hashMismatches, err := ConstructValidAndInvalidPvtData(pvtData, l.blockStore)
+	if err != nil {
+		return nil, err
+	}
+
+	err = l.blockStore.CommitPvtDataOfOldBlocks(validPvtData)
+	if err != nil {
+		return nil, err
+	}
+
+	// (2) remove stale pvt data of old blocks and then commit to the stateDB
+	err = l.txtmgmt.RemoveStaleAndCommitPvtDataOfOldBlocks(validPvtData)
+	if err != nil {
+		return nil, err
+	}
+
+	// (3) reset the lastUpdatedOldBlockList from the pvtstore
+	if err := l.blockStore.ResetLastUpdatedOldBlocksList(); err != nil {
+		return nil, err
+	}
+
+	return hashMismatches, nil
 }
 
 func (l *kvLedger) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker, error) {
@@ -369,4 +419,18 @@ func (itr *blocksItr) Next() (commonledger.QueryResult, error) {
 
 func (itr *blocksItr) Close() {
 	itr.blocksItr.Close()
+}
+
+type collectionInfoRetriever struct {
+	ledger       ledger.PeerLedger
+	infoProvider ledger.DeployedChaincodeInfoProvider
+}
+
+func (r *collectionInfoRetriever) CollectionInfo(chaincodeName, collectionName string) (*common.StaticCollectionConfig, error) {
+	qe, err := r.ledger.NewQueryExecutor()
+	if err != nil {
+		return nil, err
+	}
+	defer qe.Done()
+	return r.infoProvider.CollectionInfo(chaincodeName, collectionName, qe)
 }

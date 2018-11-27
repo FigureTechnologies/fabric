@@ -123,7 +123,7 @@ func (jcm *joinChannelMessage) AnchorPeersOf(org api.OrgIdentityType) []api.Anch
 	return jcm.members2AnchorPeers[string(org)]
 }
 
-var logger = util.GetLogger(util.LoggingServiceModule, "")
+var logger = util.GetLogger(util.ServiceLogger, "")
 
 // InitGossipService initialize gossip service
 func InitGossipService(peerIdentity []byte, endpoint string, s *grpc.Server, certs *gossipCommon.TLSCertificates,
@@ -131,7 +131,7 @@ func InitGossipService(peerIdentity []byte, endpoint string, s *grpc.Server, cer
 	// TODO: Remove this.
 	// TODO: This is a temporary work-around to make the gossip leader election module load its logger at startup
 	// TODO: in order for the flogging package to register this logger in time so it can set the log levels as requested in the config
-	util.GetLogger(util.LoggingElectionModule, "")
+	util.GetLogger(util.ElectionLogger, "")
 	return InitGossipServiceCustomDeliveryFactory(peerIdentity, endpoint, s, certs, &deliveryFactoryImpl{},
 		mcs, secAdv, secureDialOpts, bootPeers...)
 }
@@ -245,11 +245,13 @@ func (g *gossipServiceImpl) InitializeChannel(chainID string, endpoints []string
 		Fetcher:         fetcher,
 	}, g.createSelfSignedData())
 
+	reconcilerConfig := privdata2.GetReconcilerConfig()
+
 	g.privateHandlers[chainID] = privateHandler{
 		support:     support,
 		coordinator: coordinator,
 		distributor: privdata2.NewDistributor(chainID, g, collectionAccessFactory),
-		reconciler:  &privdata2.NoOpReconciler{},
+		reconciler:  privdata2.NewReconciler(support.Committer, fetcher, reconcilerConfig),
 	}
 	g.privateHandlers[chainID].reconciler.Start()
 

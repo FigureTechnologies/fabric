@@ -14,14 +14,13 @@ import (
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/hyperledger/fabric/integration/nwo"
+	"github.com/hyperledger/fabric/integration/nwo/commands"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/gexec"
 	"github.com/tedsuo/ifrit"
-
-	"github.com/hyperledger/fabric/integration/nwo"
-	"github.com/hyperledger/fabric/integration/nwo/commands"
 )
 
 var _ = Describe("SBE_E2E", func() {
@@ -35,24 +34,25 @@ var _ = Describe("SBE_E2E", func() {
 
 	BeforeEach(func() {
 		var err error
-		testDir, err = ioutil.TempDir("", "e2e")
+		testDir, err = ioutil.TempDir("", "e2e_sbe")
 		Expect(err).NotTo(HaveOccurred())
 
 		client, err = docker.NewClientFromEnv()
 		Expect(err).NotTo(HaveOccurred())
 
 		chaincode = nwo.Chaincode{
-			Name:    "mycc",
-			Version: "0.0",
-			Path:    "github.com/hyperledger/fabric/integration/chaincode/keylevelep/cmd",
-			Ctor:    `{"Args":["init"]}`,
+			Name:              "mycc",
+			Version:           "0.0",
+			Path:              "github.com/hyperledger/fabric/integration/chaincode/keylevelep/cmd",
+			Ctor:              `{"Args":["init"]}`,
+			CollectionsConfig: "testdata/collection_config.json",
 		}
 	})
 
 	AfterEach(func() {
 		if process != nil {
 			process.Signal(syscall.SIGTERM)
-			Eventually(process.Wait(), time.Minute).Should(Receive())
+			Eventually(process.Wait(), network.EventuallyTimeout).Should(Receive())
 		}
 		if network != nil {
 			network.Cleanup()
@@ -78,32 +78,58 @@ var _ = Describe("SBE_E2E", func() {
 			By("setting up the channel")
 			network.CreateAndJoinChannel(orderer, "testchannel")
 
-			By("deploy first chaincode")
+			By("updating the anchor peers")
+			network.UpdateChannelAnchors(orderer, "testchannel")
+
+			By("deploying the chaincode")
 			nwo.DeployChaincode(network, "testchannel", orderer, chaincode)
 
-			By("deploy second chaincode")
+			By("deploying a second instance of the chaincode")
 			chaincode.Name = "mycc2"
 			nwo.DeployChaincode(network, "testchannel", orderer, chaincode)
 
-			By("getting the client peer by name")
-
-			RunSBE(network, orderer)
+			RunSBE(network, orderer, "pub")
+			RunSBE(network, orderer, "priv")
 		})
 	})
 })
 
-func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
+func RunSBE(n *nwo.Network, orderer *nwo.Orderer, mode string) {
 	peerOrg1 := n.Peer("Org1", "peer0")
-	peerOrg2 := n.Peer("Org2", "peer1")
-	By("org1 adds org1 to the state-based ep of a key")
+	peerOrg2 := n.Peer("Org2", "peer0")
+
+	By("org1 initializes the key")
 	sess, err := n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeInvoke{
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["addorgs", "Org1MSP"]}`,
+		Ctor:      `{"Args":["setval", "` + mode + `", "foo"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg1, nwo.ListenPort),
-			n.PeerAddress(peerOrg2, nwo.ListenPort),
+		},
+		WaitForEvent: true,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Eventually(sess, time.Minute).Should(gexec.Exit(0))
+
+	By("org2 checks that setting the value was successful by reading it")
+	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
+		ChannelID: "testchannel",
+		Name:      "mycc",
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Eventually(sess, time.Minute).Should(gexec.Exit(0))
+	Expect(sess).To(gbytes.Say("foo"))
+
+	By("org1 adds org1 to the state-based ep of a key")
+	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeInvoke{
+		ChannelID: "testchannel",
+		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
+		Name:      "mycc",
+		Ctor:      `{"Args":["addorgs", "` + mode + `", "Org1MSP"]}`,
+		PeerAddresses: []string{
+			n.PeerAddress(peerOrg1, nwo.ListenPort),
 		},
 		WaitForEvent: true,
 	})
@@ -114,7 +140,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["listorgs"]}`,
+		Ctor:      `{"Args":["listorgs", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -125,7 +151,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["setval", "val1"]}`,
+		Ctor:      `{"Args":["setval", "` + mode + `", "val1"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg1, nwo.ListenPort),
 		},
@@ -134,11 +160,11 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
 
-	By("org1 checks that setting the value was successful by reading it")
-	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeQuery{
+	By("org2 checks that setting the value was successful by reading it")
+	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -149,7 +175,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["setval", "val2"]}`,
+		Ctor:      `{"Args":["setval", "` + mode + `", "val2"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
@@ -162,7 +188,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -173,7 +199,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["addorgs", "Org2MSP"]}`,
+		Ctor:      `{"Args":["addorgs", "` + mode + `", "Org2MSP"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg1, nwo.ListenPort),
 		},
@@ -186,7 +212,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["listorgs"]}`,
+		Ctor:      `{"Args":["listorgs", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -200,7 +226,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["setval", "val3"]}`,
+		Ctor:      `{"Args":["setval", "` + mode + `", "val3"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
@@ -213,7 +239,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -224,10 +250,10 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["setval", "val4"]}`,
+		Ctor:      `{"Args":["setval", "` + mode + `", "val4"]}`,
 		PeerAddresses: []string{
-			n.PeerAddress(n.Peer("Org1", "peer0"), nwo.ListenPort),
-			n.PeerAddress(n.Peer("Org2", "peer1"), nwo.ListenPort),
+			n.PeerAddress(peerOrg1, nwo.ListenPort),
+			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
 		WaitForEvent: true,
 	})
@@ -238,7 +264,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -249,7 +275,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["delorgs", "Org1MSP"]}`,
+		Ctor:      `{"Args":["delorgs", "` + mode + `", "Org1MSP"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
@@ -262,7 +288,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["listorgs"]}`,
+		Ctor:      `{"Args":["listorgs", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -273,10 +299,10 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc",
-		Ctor:      `{"Args":["delorgs", "Org1MSP"]}`,
+		Ctor:      `{"Args":["delorgs", "` + mode + `", "Org1MSP"]}`,
 		PeerAddresses: []string{
-			n.PeerAddress(n.Peer("Org1", "peer0"), nwo.ListenPort),
-			n.PeerAddress(n.Peer("Org2", "peer1"), nwo.ListenPort),
+			n.PeerAddress(peerOrg1, nwo.ListenPort),
+			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
 		WaitForEvent: true,
 	})
@@ -287,7 +313,7 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["listorgs"]}`,
+		Ctor:      `{"Args":["listorgs", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
 	Eventually(sess, time.Minute).Should(gexec.Exit(0))
@@ -298,9 +324,9 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc2",
-		Ctor:      `{"Args":["cc2cc", "testchannel", "mycc", "setval", "cc2cc_org2"]}`,
+		Ctor:      `{"Args":["cc2cc", "testchannel", "mycc", "setval", "` + mode + `", "cc2cc_org2"]}`,
 		PeerAddresses: []string{
-			n.PeerAddress(n.Peer("Org2", "peer1"), nwo.ListenPort),
+			n.PeerAddress(peerOrg2, nwo.ListenPort),
 		},
 		WaitForEvent: true,
 	})
@@ -311,10 +337,10 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 	sess, err = n.PeerUserSession(peerOrg2, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(sess, time.Minute).Should(gexec.Exit(0))
+	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	Expect(sess).To(gbytes.Say("cc2cc_org2"))
 
 	By("org1 uses cc2cc to set the value of the key")
@@ -322,22 +348,22 @@ func RunSBE(n *nwo.Network, orderer *nwo.Orderer) {
 		ChannelID: "testchannel",
 		Orderer:   n.OrdererAddress(orderer, nwo.ListenPort),
 		Name:      "mycc2",
-		Ctor:      `{"Args":["cc2cc", "testchannel", "mycc", "setval", "cc2cc_org1"]}`,
+		Ctor:      `{"Args":["cc2cc", "testchannel", "mycc", "setval", "` + mode + `", "cc2cc_org1"]}`,
 		PeerAddresses: []string{
 			n.PeerAddress(peerOrg1, nwo.ListenPort),
 		},
 		WaitForEvent: true,
 	})
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(sess, time.Minute).Should(gexec.Exit(0))
+	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 
 	By("org1 reads the value of the key to check that setting it was not successful")
 	sess, err = n.PeerUserSession(peerOrg1, "User1", commands.ChaincodeQuery{
 		ChannelID: "testchannel",
 		Name:      "mycc",
-		Ctor:      `{"Args":["getval"]}`,
+		Ctor:      `{"Args":["getval", "` + mode + `"]}`,
 	})
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(sess, time.Minute).Should(gexec.Exit(0))
+	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	Expect(sess).To(gbytes.Say("cc2cc_org2"))
 }

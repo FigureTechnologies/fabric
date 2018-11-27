@@ -146,11 +146,17 @@ func (vdb *VersionedDB) GetDBType() string {
 // A bulk retrieve from couchdb is used to populate the cache.
 // committedVersions cache will be used for state validation of readsets
 // revisionNumbers cache will be used during commit phase for couchdb bulk updates
+// LoadCommittedVersions can be called multiple times before calling ClearCachedVersions
+// to load more entries into the existing cache.
 func (vdb *VersionedDB) LoadCommittedVersions(keys []*statedb.CompositeKey) error {
 	nsKeysMap := map[string][]string{}
-	committedDataCache := newVersionCache()
+	committedDataCache := vdb.committedDataCache
 	for _, compositeKey := range keys {
 		ns, key := compositeKey.Namespace, compositeKey.Key
+		if _, isFound := committedDataCache.getVersion(ns, key); isFound {
+			// skip if an entry exist already
+			continue
+		}
 		committedDataCache.setVerAndRev(ns, key, nil, "")
 		logger.Debugf("Load into version cache: %s~%s", ns, key)
 		nsKeysMap[ns] = append(nsKeysMap[ns], key)
@@ -483,6 +489,14 @@ func (vdb *VersionedDB) ensureFullCommitAndRecordSavepoint(height *version.Heigh
 	if err := vdb.ensureFullCommit(dbs); err != nil {
 		return err
 	}
+
+	// If a given height is nil, it denotes that we are committing pvt data of old blocks.
+	// In this case, we should not store a savepoint for recovery. The lastUpdatedOldBlockList
+	// in the pvtstore acts as a savepoint for pvt data.
+	if height == nil {
+		return nil
+	}
+
 	// construct savepoint document and save
 	savepointCouchDoc, err := encodeSavepoint(height)
 	if err != nil {

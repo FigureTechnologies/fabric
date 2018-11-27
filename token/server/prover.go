@@ -30,9 +30,26 @@ type Marshaler interface {
 
 // A Provider is responslble for processing token commands.
 type Prover struct {
-	Marshaler     Marshaler
-	PolicyChecker PolicyChecker
-	TMSManager    TMSManager
+	CapabilityChecker CapabilityChecker
+	Marshaler         Marshaler
+	PolicyChecker     PolicyChecker
+	TMSManager        TMSManager
+}
+
+// NewProver creates a Prover
+func NewProver(policyChecker PolicyChecker, signingIdentity SignerIdentity) (*Prover, error) {
+	responseMarshaler, err := NewResponseMarshaler(signingIdentity)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Prover{
+		Marshaler:     responseMarshaler,
+		PolicyChecker: policyChecker,
+		TMSManager: &Manager{
+			LedgerManager: &PeerLedgerManager{},
+		},
+	}, nil
 }
 
 func (s *Prover) ProcessCommand(ctx context.Context, sc *token.SignedCommand) (*token.SignedCommandResponse, error) {
@@ -46,6 +63,16 @@ func (s *Prover) ProcessCommand(ctx context.Context, sc *token.SignedCommand) (*
 		return s.MarshalErrorResponse(sc.Command, err)
 	}
 
+	// check if FabToken capability is enabled
+	channelId := command.Header.ChannelId
+	enabled, err := s.CapabilityChecker.FabToken(channelId)
+	if err != nil {
+		return s.MarshalErrorResponse(sc.Command, err)
+	}
+	if !enabled {
+		return s.MarshalErrorResponse(sc.Command, errors.Errorf("FabToken capability not enabled for channel %s", channelId))
+	}
+
 	err = s.PolicyChecker.Check(sc, command)
 	if err != nil {
 		return s.MarshalErrorResponse(sc.Command, err)
@@ -55,6 +82,16 @@ func (s *Prover) ProcessCommand(ctx context.Context, sc *token.SignedCommand) (*
 	switch t := command.GetPayload().(type) {
 	case *token.Command_ImportRequest:
 		payload, err = s.RequestImport(ctx, command.Header, t.ImportRequest)
+	case *token.Command_TransferRequest:
+		payload, err = s.RequestTransfer(ctx, command.Header, t.TransferRequest)
+	case *token.Command_RedeemRequest:
+		payload, err = s.RequestRedeem(ctx, command.Header, t.RedeemRequest)
+	case *token.Command_ListRequest:
+		payload, err = s.ListUnspentTokens(ctx, command.Header, t.ListRequest)
+	case *token.Command_ApproveRequest:
+		payload, err = s.RequestApprove(ctx, command.Header, t.ApproveRequest)
+	case *token.Command_TransferFromRequest:
+		payload, err = s.RequestTransferFrom(ctx, command.Header, t.TransferFromRequest)
 	default:
 		err = errors.Errorf("command type not recognized: %T", t)
 	}
@@ -75,6 +112,75 @@ func (s *Prover) RequestImport(ctx context.Context, header *token.Header, reques
 	}
 
 	tokenTransaction, err := issuer.RequestImport(requestImport.TokensToIssue)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token.CommandResponse_TokenTransaction{TokenTransaction: tokenTransaction}, nil
+}
+
+func (s *Prover) RequestTransfer(ctx context.Context, header *token.Header, request *token.TransferRequest) (*token.CommandResponse_TokenTransaction, error) {
+	transactor, err := s.TMSManager.GetTransactor(header.ChannelId, request.Credential, header.Creator)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenTransaction, err := transactor.RequestTransfer(request)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token.CommandResponse_TokenTransaction{TokenTransaction: tokenTransaction}, nil
+}
+
+func (s *Prover) RequestRedeem(ctx context.Context, header *token.Header, request *token.RedeemRequest) (*token.CommandResponse_TokenTransaction, error) {
+	transactor, err := s.TMSManager.GetTransactor(header.ChannelId, request.Credential, header.Creator)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenTransaction, err := transactor.RequestRedeem(request)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token.CommandResponse_TokenTransaction{TokenTransaction: tokenTransaction}, nil
+}
+
+func (s *Prover) ListUnspentTokens(ctxt context.Context, header *token.Header, listRequest *token.ListRequest) (*token.CommandResponse_UnspentTokens, error) {
+	transactor, err := s.TMSManager.GetTransactor(header.ChannelId, listRequest.Credential, header.Creator)
+	if err != nil {
+		return nil, err
+	}
+
+	tokens, err := transactor.ListTokens()
+	if err != nil {
+		return nil, err
+	}
+
+	return &token.CommandResponse_UnspentTokens{UnspentTokens: tokens}, nil
+}
+
+func (s *Prover) RequestApprove(ctx context.Context, header *token.Header, request *token.ApproveRequest) (*token.CommandResponse_TokenTransaction, error) {
+	transactor, err := s.TMSManager.GetTransactor(header.ChannelId, request.Credential, header.Creator)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenTransaction, err := transactor.RequestApprove(request)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token.CommandResponse_TokenTransaction{TokenTransaction: tokenTransaction}, nil
+}
+
+func (s *Prover) RequestTransferFrom(ctx context.Context, header *token.Header, request *token.TransferRequest) (*token.CommandResponse_TokenTransaction, error) {
+	transactor, err := s.TMSManager.GetTransactor(header.ChannelId, request.Credential, header.Creator)
+	if err != nil {
+		return nil, err
+	}
+	tokenTransaction, err := transactor.RequestTransferFrom(request)
 	if err != nil {
 		return nil, err
 	}

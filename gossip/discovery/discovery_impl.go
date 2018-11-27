@@ -31,12 +31,12 @@ var maxConnectionAttempts = 120
 
 // SetAliveTimeInterval sets the alive time interval
 func SetAliveTimeInterval(interval time.Duration) {
-	util.SetDuration("peer.gossip.aliveTimeInterval", interval)
+	util.SetVal("peer.gossip.aliveTimeInterval", interval)
 }
 
 // SetAliveExpirationTimeout sets the expiration timeout
 func SetAliveExpirationTimeout(timeout time.Duration) {
-	util.SetDuration("peer.gossip.aliveExpirationTimeout", timeout)
+	util.SetVal("peer.gossip.aliveExpirationTimeout", timeout)
 	aliveExpirationCheckInterval = time.Duration(timeout / 10)
 }
 
@@ -47,7 +47,7 @@ func SetAliveExpirationCheckInterval(interval time.Duration) {
 
 // SetReconnectInterval sets the reconnect interval
 func SetReconnectInterval(interval time.Duration) {
-	util.SetDuration("peer.gossip.reconnectInterval", interval)
+	util.SetVal("peer.gossip.reconnectInterval", interval)
 }
 
 // SetMaxConnAttempts sets the maximum number of connection
@@ -111,7 +111,7 @@ func NewDiscoveryService(self NetworkMember, comm CommService, crypt CryptoServi
 		lock:             &sync.RWMutex{},
 		toDieChan:        make(chan struct{}, 1),
 		toDieFlag:        int32(0),
-		logger:           util.GetLogger(util.LoggingDiscoveryModule, self.InternalEndpoint),
+		logger:           util.GetLogger(util.DiscoveryLogger, self.InternalEndpoint),
 		disclosurePolicy: disPol,
 		pubsub:           util.NewPubSub(),
 

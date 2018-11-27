@@ -48,9 +48,6 @@ func newChain(
 	logger.Infof("[channel: %s] Starting chain with last persisted offset %d and last recorded block %d",
 		support.ChainID(), lastOffsetPersisted, lastCutBlockNumber)
 
-	errorChan := make(chan struct{})
-	close(errorChan) // We need this closed when starting up
-
 	doneReprocessingMsgInFlight := make(chan struct{})
 	// In either one of following cases, we should unblock ingress messages:
 	// - lastResubmittedConfigOffset == 0, where we've never resubmitted any config messages
@@ -73,7 +70,6 @@ func newChain(
 		lastResubmittedConfigOffset: lastResubmittedConfigOffset,
 		lastCutBlockNumber:          lastCutBlockNumber,
 
-		errorChan:                   errorChan,
 		haltChan:                    make(chan struct{}),
 		startChan:                   make(chan struct{}),
 		doneReprocessingMsgInFlight: doneReprocessingMsgInFlight,
@@ -117,7 +113,15 @@ type chainImpl struct {
 // Errored returns a channel which will close when a partition consumer error
 // has occurred. Checked by Deliver().
 func (chain *chainImpl) Errored() <-chan struct{} {
-	return chain.errorChan
+	select {
+	case <-chain.startChan:
+		return chain.errorChan
+	default:
+		// While the consenter is starting, always return an error
+		dummyError := make(chan struct{})
+		close(dummyError)
+		return dummyError
+	}
 }
 
 // Start allocates the necessary resources for staying up to date with this
@@ -168,7 +172,7 @@ func (chain *chainImpl) WaitReady() error {
 			return nil
 		}
 	default: // Not ready yet
-		return fmt.Errorf("will not enqueue, consenter for this channel hasn't started yet")
+		return fmt.Errorf("backing Kafka cluster has not completed booting; try again later")
 	}
 }
 
@@ -291,8 +295,8 @@ func startThread(chain *chainImpl) {
 
 	chain.doneProcessingMessagesToBlocks = make(chan struct{})
 
-	close(chain.startChan)                // Broadcast requests will now go through
 	chain.errorChan = make(chan struct{}) // Deliver requests will also go through
+	close(chain.startChan)                // Broadcast requests will now go through
 
 	logger.Infof("[channel: %s] Start phase completed successfully", chain.channel.topic())
 
@@ -577,17 +581,26 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 	commitNormalMsg := func(message *cb.Envelope, newOffset int64) {
 		batches, pending := chain.BlockCutter().Ordered(message)
 		logger.Debugf("[channel: %s] Ordering results: items in batch = %d, pending = %v", chain.ChainID(), len(batches), pending)
+
+		switch {
+		case chain.timer != nil && !pending:
+			// Timer is already running but there are no messages pending, stop the timer
+			chain.timer = nil
+		case chain.timer == nil && pending:
+			// Timer is not already running and there are messages pending, so start it
+			chain.timer = time.After(chain.SharedConfig().BatchTimeout())
+			logger.Debugf("[channel: %s] Just began %s batch timer", chain.ChainID(), chain.SharedConfig().BatchTimeout().String())
+		default:
+			// Do nothing when:
+			// 1. Timer is already running and there are messages pending
+			// 2. Timer is not set and there are no messages pending
+		}
+
 		if len(batches) == 0 {
 			// If no block is cut, we update the `lastOriginalOffsetProcessed`, start the timer if necessary and return
 			chain.lastOriginalOffsetProcessed = newOffset
-			if chain.timer == nil {
-				chain.timer = time.After(chain.SharedConfig().BatchTimeout())
-				logger.Debugf("[channel: %s] Just began %s batch timer", chain.ChainID(), chain.SharedConfig().BatchTimeout().String())
-			}
 			return
 		}
-
-		chain.timer = nil
 
 		offset := receivedOffset
 		if pending || len(batches) == 2 {

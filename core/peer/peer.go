@@ -20,6 +20,7 @@ import (
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	fileledger "github.com/hyperledger/fabric/common/ledger/blockledger/file"
+	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/comm"
@@ -39,6 +40,8 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/token/tms/manager"
+	"github.com/hyperledger/fabric/token/transaction"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 	"golang.org/x/sync/semaphore"
@@ -49,8 +52,12 @@ var peerLogger = flogging.MustGetLogger("peer")
 var peerServer *comm.GRPCServer
 
 var configTxProcessor = newConfigTxProcessor()
+var tokenTxProcessor = &transaction.Processor{
+	TMSManager: &manager.Manager{
+		IdentityDeserializerManager: &manager.FabricIdentityDeserializerManager{}}}
 var ConfigTxProcessors = customtx.Processors{
-	common.HeaderType_CONFIG: configTxProcessor,
+	common.HeaderType_CONFIG:            configTxProcessor,
+	common.HeaderType_TOKEN_TRANSACTION: tokenTxProcessor,
 }
 
 // singleton instance to manage credentials for the peer across channel config changes
@@ -195,7 +202,9 @@ var validationWorkersSemaphore *semaphore.Weighted
 // Initialize sets up any chains that the peer has from the persistence. This
 // function should be called at the start up when the ledger and gossip
 // ready
-func Initialize(init func(string), ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodeProvider, pm txvalidator.PluginMapper, pr *platforms.Registry, deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider) {
+func Initialize(init func(string), ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodeProvider,
+	pm txvalidator.PluginMapper, pr *platforms.Registry, deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
+	membershipProvider ledger.MembershipInfoProvider, metricsProvider metrics.Provider) {
 	nWorkers := viper.GetInt("peer.validatorPoolSize")
 	if nWorkers <= 0 {
 		nWorkers = runtime.NumCPU()
@@ -211,6 +220,8 @@ func Initialize(init func(string), ccp ccprovider.ChaincodeProvider, sccp sysccp
 		CustomTxProcessors:            ConfigTxProcessors,
 		PlatformRegistry:              pr,
 		DeployedChaincodeInfoProvider: deployedCCInfoProvider,
+		MembershipInfoProvider:        membershipProvider,
+		MetricsProvider:               metricsProvider,
 	})
 	ledgerIds, err := ledgermgmt.GetLedgerIDs()
 	if err != nil {
@@ -712,12 +723,12 @@ func (*collectionSupport) GetIdentityDeserializer(chainID string) msp.IdentityDe
 type DeliverChainManager struct {
 }
 
-func (DeliverChainManager) GetChain(chainID string) (deliver.Chain, bool) {
+func (DeliverChainManager) GetChain(chainID string) deliver.Chain {
 	channel, ok := chains.list[chainID]
 	if !ok {
-		return nil, ok
+		return nil
 	}
-	return channel.cs, ok
+	return channel.cs
 }
 
 // fileLedgerBlockStore implements the interface expected by

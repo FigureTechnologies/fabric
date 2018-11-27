@@ -98,7 +98,7 @@ is the only member of the network.
 ### Certificate Authorities
 
 You can also see a Certificate Authority, CA4, which is used to issue
-certificates to administrators and network nodes. CA4 plays a a key role in our
+certificates to administrators and network nodes. CA4 plays a key role in our
 network because it dispenses X.509 certificates that can be used to identify
 components as belonging to organization R4. Certificates issued by CAs
 can also be used to sign transactions to indicate that an organization endorses
@@ -447,11 +447,6 @@ development, we have a channel in which organizations R1 and R2 can fully
 transact with each other.  Specifically, this means that applications A1 and A2
 can generate transactions using smart contract S5 and ledger L1 on channel C1.
 
-It's also worth noting that S5 can have different implementations on peer nodes
-P1 and P2 -- so long as they implement the same smart contract interface.  It
-means that in principle, S5 could be implemented in GOLANG on peer node P1, and
-JavaScript on peer node P2!
-
 ### Generating and accepting transactions
 
 In contrast to peer nodes, which always host a copy of the ledger, we see that
@@ -654,7 +649,7 @@ channels. The channel configuration CC2 now contains the policies that govern
 channel resources, assigning management rights to organizations R2 and R3 over
 channel C2. It is managed exclusively by R2 and R3; R1 and R4 have no power in
 channel C2. For example, channel configuration CC2 can subsequently be updated
-to add organizations to support network growth, but this can only be done by R2 
+to add organizations to support network growth, but this can only be done by R2
 or R3.
 
 Note how the channel configurations CC1 and CC2 remain completely separate from
@@ -733,7 +728,7 @@ own copy of the network configuration.
 
 Both network and channel configurations are kept consistent using the same
 blockchain technology that is used for user transactions -- but for
-**configuration** transactions. To change a network or client configuration, an
+**configuration** transactions. To change a network or channel configuration, an
 administrator must submit a configuration transaction to change the network or
 channel configuration. It must be signed by the organizations identified in the
 appropriate policy as being responsible for configuration change. This policy is
@@ -809,7 +804,7 @@ follows: Client applications A1 can use channel C1 for communication with peers
 P1 and P2, and ordering service O4; client application A2 can use channel C1
 for communication with peers P1 and P2 and channel C2 for communication with
 peers P2 and P3 and ordering service O4; client application A3 can use channel
-C2 for communication with peer P3 and ordering service O4. Ordering service O4
+C2 for communication with peer P3 and P2 and ordering service O4. Ordering service O4
 can make use of the communication services of channels C1 and C2. Channel
 configuration CC1 applies to channel C1, CC2 applies to channel C2.*
 
@@ -926,7 +921,7 @@ They key point of understanding is that policy change is managed by a
 policy within the policy itself.  The **modification policy**, or
 **mod_policy** for short, is a first class policy within a network or channel
 configuration that manages change. Let's give two brief examples of how we've
-**already** used mod_policy can be used to manage change in our network!
+**already** used mod_policy to manage change in our network!
 
 The first example was when the network was initially set up. At this time, only
 organization R4 was allowed to manage the network. In practice, this was

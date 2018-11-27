@@ -12,13 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statecouchdb"
 	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	"github.com/hyperledger/fabric/integration/runner"
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestEnv - an interface that a test environment implements
@@ -109,7 +108,7 @@ func (env *CouchDBCommonStorageTestEnv) Init(t testing.TB) {
 	viper.Set("ledger.state.couchDBConfig.username", "")
 	viper.Set("ledger.state.couchDBConfig.password", "")
 	viper.Set("ledger.state.couchDBConfig.maxRetries", 3)
-	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 10)
+	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 20)
 	viper.Set("ledger.state.couchDBConfig.requestTimeout", time.Second*35)
 
 	env.bookkeeperTestEnv = bookkeeping.NewTestEnv(t)

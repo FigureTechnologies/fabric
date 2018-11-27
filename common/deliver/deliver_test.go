@@ -20,10 +20,9 @@ import (
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
 	"github.com/hyperledger/fabric/protos/utils"
-	"github.com/pkg/errors"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -120,7 +119,7 @@ var _ = Describe("Deliver", func() {
 			fakeChain.ReaderReturns(fakeBlockReader)
 
 			fakeChainManager = &mock.ChainManager{}
-			fakeChainManager.GetChainReturns(fakeChain, true)
+			fakeChainManager.GetChainReturns(fakeChain)
 
 			fakePolicyChecker = &mock.PolicyChecker{}
 			fakeReceiver = &mock.Receiver{}
@@ -453,7 +452,7 @@ var _ = Describe("Deliver", func() {
 
 		Context("when the channel is not found", func() {
 			BeforeEach(func() {
-				fakeChainManager.GetChainReturns(nil, false)
+				fakeChainManager.GetChainReturns(nil)
 			})
 
 			It("sends status not found", func() {
@@ -510,11 +509,22 @@ var _ = Describe("Deliver", func() {
 		})
 
 		Context("when the chain errors while reading from the chain", func() {
+			var doneCh chan struct{}
+
 			BeforeEach(func() {
+				doneCh = make(chan struct{})
+				fakeBlockIterator.NextStub = func() (*cb.Block, cb.Status) {
+					<-doneCh
+					return &cb.Block{}, cb.Status_INTERNAL_SERVER_ERROR
+				}
 				fakeChain.ReaderStub = func() blockledger.Reader {
 					close(errCh)
 					return fakeBlockReader
 				}
+			})
+
+			AfterEach(func() {
+				close(doneCh)
 			})
 
 			It("sends status service unavailable", func() {

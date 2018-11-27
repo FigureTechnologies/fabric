@@ -173,7 +173,8 @@ chaincode, pass the following command instead:
   ./byfn.sh up -l node
 
 .. note:: For more information on the Node.js shim, please refer to its
-          `documentation <https://fabric-shim.github.io/fabric-shim.ChaincodeInterface.html>`_.
+          `documentation <https://fabric-shim.github.io/ChaincodeInterface.html>`_.
+
 
 .. note:: For more information on the Java shim, please refer to its
           `documentation <https://fabric-chaincode-java.github.io/org/hyperledger/fabric/shim/Chaincode.html>`_.
@@ -267,7 +268,7 @@ If you'd like to learn more about the underlying tooling and bootstrap mechanics
 continue reading.  In these next sections we'll walk through the various steps
 and requirements to build a fully-functional Hyperledger Fabric network.
 
-.. note:: The manual steps outlined below assume that the ``CORE_LOGGING_LEVEL`` in
+.. note:: The manual steps outlined below assume that the ``FABRIC_LOGGING_SPEC`` in
           the ``cli`` container is set to ``DEBUG``. You can set this by modifying
           the ``docker-compose-cli.yaml`` file in the ``first-network`` directory.
           e.g.
@@ -282,8 +283,8 @@ and requirements to build a fully-functional Hyperledger Fabric network.
               environment:
                 - GOPATH=/opt/gopath
                 - CORE_VM_ENDPOINT=unix:///host/var/run/docker.sock
-                - CORE_LOGGING_LEVEL=DEBUG
-                #- CORE_LOGGING_LEVEL=INFO
+                - FABRIC_LOGGING_SPEC=DEBUG
+                #- FABRIC_LOGGING_SPEC=INFO
 
 Crypto Generator
 ----------------
@@ -447,7 +448,7 @@ Then, we'll invoke the ``configtxgen`` tool to create the orderer genesis block:
 
 .. code:: bash
 
-    ../bin/configtxgen -profile TwoOrgsOrdererGenesis -outputBlock ./channel-artifacts/genesis.block
+    ../bin/configtxgen -profile TwoOrgsOrdererGenesis -channelID byfn-sys-channel -outputBlock ./channel-artifacts/genesis.block
 
 You should see an output similar to the following in your terminal:
 
@@ -459,7 +460,7 @@ You should see an output similar to the following in your terminal:
 
 .. note:: The orderer genesis block and the subsequent artifacts we are about to create
           will be output into the ``channel-artifacts`` directory at the root of this
-          project.
+          project. The `channelID` in the above command is the name of the system channel.
 
 .. _createchanneltx:
 
@@ -692,7 +693,7 @@ place the specified source code flavor onto our peer's filesystem.
 
 .. code:: bash
 
-    # this installs the Go chaincode
+    # this installs the Go chaincode. For go chaincode -p takes the relative path from $GOPATH/src
     peer chaincode install -n mycc -v 1.0 -p github.com/chaincode/chaincode_example02/go/
 
 **Node.js**
@@ -700,13 +701,16 @@ place the specified source code flavor onto our peer's filesystem.
 .. code:: bash
 
     # this installs the Node.js chaincode
-    # make note of the -l flag; we use this to specify the language
+    # make note of the -l flag to indicate "node" chaincode
+    # for node chaincode -p takes the absolute path to the node.js chaincode
     peer chaincode install -n mycc -v 1.0 -l node -p /opt/gopath/src/github.com/chaincode/chaincode_example02/node/
 
 **Java**
 
 .. code:: bash
 
+    # make note of the -l flag to indicate "java" chaincode
+    # for java chaincode -p takes the absolute path to the java chaincode
     peer chaincode install -n mycc -v 1.0 -l java -p /opt/gopath/src/github.com/chaincode/chaincode_example02/java/
 
 Next, instantiate the chaincode on the channel. This will initialize the

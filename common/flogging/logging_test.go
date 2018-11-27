@@ -9,7 +9,7 @@ package flogging_test
 import (
 	"bytes"
 	"errors"
-	"regexp"
+	"fmt"
 	"testing"
 
 	"github.com/hyperledger/fabric/common/flogging"
@@ -22,7 +22,6 @@ func TestNew(t *testing.T) {
 	logging, err := flogging.New(flogging.Config{})
 	assert.NoError(t, err)
 	assert.Equal(t, zapcore.InfoLevel, logging.DefaultLevel())
-	assert.Empty(t, logging.Levels())
 
 	_, err = flogging.New(flogging.Config{
 		LogSpec: "::=borken=::",
@@ -30,72 +29,10 @@ func TestNew(t *testing.T) {
 	assert.EqualError(t, err, "invalid logging specification '::=borken=::': bad segment '=borken='")
 }
 
-func TestLoggingReset(t *testing.T) {
-	logging, err := flogging.New(flogging.Config{})
-	assert.NoError(t, err)
-
-	var tests = []struct {
-		desc string
-		flogging.Config
-		err            error
-		expectedRegexp string
-	}{
-		{
-			desc:           "implicit log spec",
-			Config:         flogging.Config{Format: "%{message}"},
-			expectedRegexp: regexp.QuoteMeta("this is a warning message\n"),
-		},
-		{
-			desc:           "simple debug config",
-			Config:         flogging.Config{LogSpec: "debug", Format: "%{message}"},
-			expectedRegexp: regexp.QuoteMeta("this is a debug message\nthis is a warning message\n"),
-		},
-		{
-			desc:           "module error config",
-			Config:         flogging.Config{LogSpec: "test-module=error:info", Format: "%{message}"},
-			expectedRegexp: "^$",
-		},
-		{
-			desc:           "json",
-			Config:         flogging.Config{LogSpec: "info", Format: "json"},
-			expectedRegexp: `{"level":"warn","ts":\d+\.\d+,"name":"test-module","caller":"flogging/logging_test.go:\d+","msg":"this is a warning message"}`,
-		},
-		{
-			desc:   "bad log spec",
-			Config: flogging.Config{LogSpec: "::=borken=::", Format: "%{message}"},
-			err:    errors.New("invalid logging specification '::=borken=::': bad segment '=borken='"),
-		},
-		{
-			desc:   "bad format",
-			Config: flogging.Config{LogSpec: "info", Format: "%{color:bad}"},
-			err:    errors.New("invalid color option: bad"),
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.desc, func(t *testing.T) {
-			buf := &bytes.Buffer{}
-			tc.Config.Writer = buf
-
-			logging.ResetLevels()
-			err := logging.Apply(tc.Config)
-			if tc.err != nil {
-				assert.EqualError(t, err, tc.err.Error())
-				return
-			}
-			assert.NoError(t, err)
-
-			logger := logging.Logger("test-module")
-			logger.Debug("this is a debug message")
-			logger.Warn("this is a warning message")
-
-			assert.Regexp(t, tc.expectedRegexp, buf.String())
-		})
-	}
-}
-
 //go:generate counterfeiter -o mock/write_syncer.go -fake-name WriteSyncer . writeSyncer
-type writeSyncer interface{ zapcore.WriteSyncer }
+type writeSyncer interface {
+	zapcore.WriteSyncer
+}
 
 func TestLoggingSetWriter(t *testing.T) {
 	ws := &mock.WriteSyncer{}
@@ -114,4 +51,42 @@ func TestLoggingSetWriter(t *testing.T) {
 	ws.SyncReturns(errors.New("welp"))
 	err = logging.Sync()
 	assert.EqualError(t, err, "welp")
+}
+
+func TestNamedLogger(t *testing.T) {
+	defer flogging.Reset()
+	buf := &bytes.Buffer{}
+	flogging.Global.SetWriter(buf)
+
+	t.Run("logger and named (child) logger with different levels", func(t *testing.T) {
+		defer buf.Reset()
+		logger := flogging.MustGetLogger("eugene")
+		logger2 := logger.Named("george")
+		flogging.ActivateSpec("eugene=info:eugene.george=error")
+
+		logger.Info("from eugene")
+		logger2.Info("from george")
+		assert.Contains(t, buf.String(), "from eugene")
+		assert.NotContains(t, buf.String(), "from george")
+	})
+
+	t.Run("named logger where parent logger isn't enabled", func(t *testing.T) {
+		logger := flogging.MustGetLogger("foo")
+		logger2 := logger.Named("bar")
+		flogging.ActivateSpec("foo=fatal:foo.bar=error")
+		logger.Error("from foo")
+		logger2.Error("from bar")
+		assert.NotContains(t, buf.String(), "from foo")
+		assert.Contains(t, buf.String(), "from bar")
+	})
+}
+
+func TestInvalidLoggerName(t *testing.T) {
+	names := []string{"test*", ".test", "test.", ".", ""}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			msg := fmt.Sprintf("invalid logger name: %s", name)
+			assert.PanicsWithValue(t, msg, func() { flogging.MustGetLogger(name) })
+		})
+	}
 }

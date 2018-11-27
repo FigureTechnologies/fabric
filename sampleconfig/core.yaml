@@ -5,55 +5,6 @@
 
 ###############################################################################
 #
-#    LOGGING section
-#
-###############################################################################
-logging:
-
-    # Default logging levels are specified here.
-
-    # Valid logging levels are case-insensitive strings chosen from
-
-    #     FATAL | PANIC | ERROR | WARNING | INFO | DEBUG
-
-    # The overall default logging level can be specified in various ways,
-    # listed below from strongest to weakest:
-    #
-    # 1. The --logging-level=<level> command line option overrides all other
-    #    default specifications.
-    #
-    # 2. The environment variable CORE_LOGGING_LEVEL otherwise applies to
-    #    all peer commands if defined as a non-empty string.
-    #
-    # 3. The value of `level` that directly follows in this file.
-    #
-    # If no overall default level is provided via any of the above methods,
-    # the peer will default to INFO (the value of defaultLevel in
-    # common/flogging/logging.go)
-
-    # Default for all modules running within the scope of a peer.
-    # Note: this value is only used when --logging-level or CORE_LOGGING_LEVEL
-    #       are not set
-    level:       info
-
-    # The overall default values mentioned above can be overridden for the
-    # specific components listed in the override section below.
-
-    # Override log levels for various peer modules.
-    cauthdsl:   warning
-    gossip:     info
-    grpc:       error
-    ledger:     info
-    msp:        warning
-    policies:   warning
-    peer:
-        gossip: warning
-
-    # Message format for the peer logs
-    format: '%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}'
-
-###############################################################################
-#
 #    Peer section
 #
 ###############################################################################
@@ -240,6 +191,8 @@ peer:
             # reconcileSleepInterval determines the time reconciler sleeps from end of an iteration until the beginning
             # of the next reconciliation iteration.
             reconcileSleepInterval: 5m
+            # reconciliationEnabled is a flag that indicates whether private data reconciliation is enable or not.
+            reconciliationEnabled: true
 
     # TLS Settings
     # Note that peer-chaincode connections through chaincodeListenAddress is
@@ -353,7 +306,7 @@ peer:
         listenAddress: 0.0.0.0:6060
 
     # The admin service is used for administrative operations such as
-    # control over log module severity, etc.
+    # control over logger levels, etc.
     # Only peer administrators can use the service.
     adminService:
         # The interface and port on which the admin server will listen on.
@@ -587,7 +540,7 @@ chaincode:
     logging:
       # Default level for all loggers within the chaincode container
       level:  info
-      # Override default level for the 'shim' module
+      # Override default level for the 'shim' logger
       shim:   warning
       # Format for the chaincode container logs
       format: '%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}'
@@ -625,7 +578,7 @@ ledger:
        # Number of retries for CouchDB errors
        maxRetries: 3
        # Number of retries for CouchDB errors during peer startup
-       maxRetriesOnStartup: 10
+       maxRetriesOnStartup: 12
        # CouchDB request timeout (unit: duration, e.g. 20s)
        requestTimeout: 35s
        # Limit on the number of records per each CouchDB query
@@ -662,29 +615,49 @@ ledger:
 #
 ###############################################################################
 metrics:
-        # enable or disable metrics server
-        enabled: false
+    # statsd, prometheus, or disabled
+    provider: disabled
 
-        # when enable metrics server, must specific metrics reporter type
-        # currently supported type: "statsd","prom"
-        reporter: statsd
+    # statsd configuration
+    statsd:
+        # network type: tcp or udp
+        network: udp
 
-        # determines frequency of report metrics(unit: second)
-        interval: 1s
+        # statsd server address
+        address: 127.0.0.1:8125
 
-        statsdReporter:
+        # the interval at which locally cached counters and gauges are pushsed
+        # to statsd; timings are pushed immediately
+        writeInterval: 10s
 
-              # statsd server address to connect
-              address: 0.0.0.0:8125
+        # prefix is prepended to all emitted statsd merics
+        prefix: peer
 
-              # determines frequency of push metrics to statsd server(unit: second)
-              flushInterval: 2s
+    prometheus:
+        # listen address for prometheus scrape endpoint
+        listenAddress: 127.0.0.1:8080
 
-              # max size bytes for each push metrics request
-              # intranet recommend 1432 and internet recommend 512
-              flushBytes: 1432
+        # path to expose the metrics handler
+        handlerPath: /metrics
 
-        promReporter:
+        tls:
+            # TLS enabled
+            enabled: true
 
-              # prometheus http server listen address for pull metrics
-              listenAddress: 0.0.0.0:8080
+            # path to PEM encoded server certificate for the scrape server
+            cert:
+                file: tls/server.crt
+
+            # path to PEM encoded server key for the scrape server
+            key:
+                file: tls/server.key
+
+            # require client certificate authentication to access metrics
+            # endpoint
+            clientAuthRequired: true
+
+            # paths to PEM encoded ca certificates to use for client
+            # authentication
+            clientRootCAs:
+                files:
+                - tls/ca.crt

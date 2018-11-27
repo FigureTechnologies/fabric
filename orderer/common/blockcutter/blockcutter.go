@@ -8,14 +8,11 @@ package blockcutter
 
 import (
 	"github.com/hyperledger/fabric/common/channelconfig"
-	cb "github.com/hyperledger/fabric/protos/common"
-
 	"github.com/hyperledger/fabric/common/flogging"
+	cb "github.com/hyperledger/fabric/protos/common"
 )
 
-const pkgLogID = "orderer/common/blockcutter"
-
-var logger = flogging.MustGetLogger(pkgLogID)
+var logger = flogging.MustGetLogger("orderer.common.blockcutter")
 
 type OrdererConfigFetcher interface {
 	OrdererConfig() (channelconfig.Orderer, bool)
@@ -25,8 +22,7 @@ type OrdererConfigFetcher interface {
 type Receiver interface {
 	// Ordered should be invoked sequentially as messages are ordered
 	// Each batch in `messageBatches` will be wrapped into a block.
-	// `pending` indicates if there are still messages pending in the receiver. It
-	// is useful for Kafka orderer to determine the `LastOffsetPersisted` of block.
+	// `pending` indicates if there are still messages pending in the receiver.
 	Ordered(msg *cb.Envelope) (messageBatches [][]*cb.Envelope, pending bool)
 
 	// Cut returns the current batch and starts a new one

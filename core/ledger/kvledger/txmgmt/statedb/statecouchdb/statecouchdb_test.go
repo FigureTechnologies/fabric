@@ -13,9 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
@@ -24,11 +21,11 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
 	ledgertestutil "github.com/hyperledger/fabric/core/ledger/testutil"
 	"github.com/hyperledger/fabric/integration/runner"
+	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
-	flogging.SetModuleLevel("statecouchdb", "debug")
-	flogging.SetModuleLevel("couchdb", "debug")
 	os.Exit(testMain(m))
 }
 
@@ -49,12 +46,12 @@ func testMain(m *testing.M) int {
 	viper.Set("ledger.state.couchDBConfig.username", "")
 	viper.Set("ledger.state.couchDBConfig.password", "")
 	viper.Set("ledger.state.couchDBConfig.maxRetries", 3)
-	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 10)
+	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 20)
 	viper.Set("ledger.state.couchDBConfig.requestTimeout", time.Second*35)
 	// Disable auto warm to avoid error logs when the couchdb database has been dropped
 	viper.Set("ledger.state.couchDBConfig.autoWarmIndexes", false)
 
-	flogging.SetModuleLevel("statecouchdb", "debug")
+	flogging.ActivateSpec("statecouchdb,couchdb=debug")
 	//run the actual test
 	return m.Run()
 }
@@ -244,11 +241,11 @@ func TestDebugFunctions(t *testing.T) {
 	// initialize a key list
 	loadKeys := []*statedb.CompositeKey{}
 	//create a composite key and add to the key list
-	compositeKey := statedb.CompositeKey{Namespace: "ns", Key: "key3"}
-	loadKeys = append(loadKeys, &compositeKey)
-	compositeKey = statedb.CompositeKey{Namespace: "ns", Key: "key4"}
-	loadKeys = append(loadKeys, &compositeKey)
-	assert.Equal(t, "[ns,key4],[ns,key4]", printCompositeKeys(loadKeys))
+	compositeKey3 := statedb.CompositeKey{Namespace: "ns", Key: "key3"}
+	loadKeys = append(loadKeys, &compositeKey3)
+	compositeKey4 := statedb.CompositeKey{Namespace: "ns", Key: "key4"}
+	loadKeys = append(loadKeys, &compositeKey4)
+	assert.Equal(t, "[ns,key3],[ns,key4]", printCompositeKeys(loadKeys))
 
 }
 
@@ -688,4 +685,10 @@ func TestPaginatedQueryValidation(t *testing.T) {
 	err = validateQueryMetadata(queryOptions)
 	assert.Error(t, err, "An should have been thrown for an invalid options")
 
+}
+
+func TestApplyUpdatesWithNilHeight(t *testing.T) {
+	env := NewTestVDBEnv(t)
+	defer env.Cleanup()
+	commontests.TestApplyUpdatesWithNilHeight(t, env.DBProvider)
 }

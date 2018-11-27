@@ -9,12 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shopify/sarama"
 	bccsp "github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/viperutil"
 	coreconfig "github.com/hyperledger/fabric/core/config"
-
-	"github.com/Shopify/sarama"
 	"github.com/spf13/viper"
 )
 
@@ -34,6 +33,8 @@ type TopLevel struct {
 	RAMLedger  RAMLedger
 	Kafka      Kafka
 	Debug      Debug
+	Consensus  interface{}
+	Operations Operations
 }
 
 // General contains config which should be common among all orderer types.
@@ -42,18 +43,28 @@ type General struct {
 	ListenAddress  string
 	ListenPort     uint16
 	TLS            TLS
+	Cluster        Cluster
 	Keepalive      Keepalive
 	GenesisMethod  string
 	GenesisProfile string
 	SystemChannel  string
 	GenesisFile    string
 	Profile        Profile
-	LogLevel       string
-	LogFormat      string
 	LocalMSPDir    string
 	LocalMSPID     string
 	BCCSP          *bccsp.FactoryOpts
 	Authentication Authentication
+}
+
+type Cluster struct {
+	RootCAs                 []string
+	ClientCertificate       string
+	ClientPrivateKey        string
+	DialTimeout             time.Duration
+	RPCTimeout              time.Duration
+	ReplicationBufferSize   int
+	ReplicationPullTimeout  time.Duration
+	ReplicationRetryTimeout time.Duration
 }
 
 // Keepalive contains configuration for gRPC servers.
@@ -167,6 +178,33 @@ type Debug struct {
 	DeliverTraceDir   string
 }
 
+// Operations configures the operations endpont for the orderer.
+type Operations struct {
+	ListenAddress string
+	Metrics       Metrics
+	TLS           TLS
+}
+
+// Operations confiures the metrics provider for the orderer.
+type Metrics struct {
+	Provider   string
+	Statsd     Statsd
+	Prometheus Prometheus
+}
+
+// Statsd provides the configuration required to emit statsd metrics from the orderer.
+type Statsd struct {
+	Network       string
+	Address       string
+	WriteInterval time.Duration
+	Prefix        string
+}
+
+// Prometheus provides the configuration required to host prometheus.
+type Prometheus struct {
+	HandlerPath string
+}
+
 // Defaults carries the default orderer configuration values.
 var Defaults = TopLevel{
 	General: General{
@@ -181,8 +219,6 @@ var Defaults = TopLevel{
 			Enabled: false,
 			Address: "0.0.0.0:6060",
 		},
-		LogLevel:    "INFO",
-		LogFormat:   "%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}",
 		LocalMSPDir: "msp",
 		LocalMSPID:  "SampleOrg",
 		BCCSP:       bccsp.GetDefaultOpts(),
@@ -233,6 +269,12 @@ var Defaults = TopLevel{
 		BroadcastTraceDir: "",
 		DeliverTraceDir:   "",
 	},
+	Operations: Operations{
+		ListenAddress: "127.0.0.1:0",
+		Metrics: Metrics{
+			Provider: "disabled",
+		},
+	},
 }
 
 // Load parses the orderer YAML file and environment, producing
@@ -260,7 +302,15 @@ func Load() (*TopLevel, error) {
 
 func (c *TopLevel) completeInitialization(configDir string) {
 	defer func() {
-		// Translate any paths
+		// Translate any paths for cluster TLS configuration if applicable
+		if c.General.Cluster.ClientPrivateKey != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientPrivateKey)
+		}
+		if c.General.Cluster.ClientCertificate != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientCertificate)
+		}
+		c.General.Cluster.RootCAs = translateCAs(configDir, c.General.Cluster.RootCAs)
+		// Translate any paths for general TLS configuration
 		c.General.TLS.RootCAs = translateCAs(configDir, c.General.TLS.RootCAs)
 		c.General.TLS.ClientRootCAs = translateCAs(configDir, c.General.TLS.ClientRootCAs)
 		coreconfig.TranslatePathInPlace(configDir, &c.General.TLS.PrivateKey)
@@ -281,13 +331,6 @@ func (c *TopLevel) completeInitialization(configDir string) {
 		case c.General.ListenPort == 0:
 			logger.Infof("General.ListenPort unset, setting to %v", Defaults.General.ListenPort)
 			c.General.ListenPort = Defaults.General.ListenPort
-
-		case c.General.LogLevel == "":
-			logger.Infof("General.LogLevel unset, setting to %s", Defaults.General.LogLevel)
-			c.General.LogLevel = Defaults.General.LogLevel
-		case c.General.LogFormat == "":
-			logger.Infof("General.LogFormat unset, setting to %s", Defaults.General.LogFormat)
-			c.General.LogFormat = Defaults.General.LogFormat
 
 		case c.General.GenesisMethod == "":
 			c.General.GenesisMethod = Defaults.General.GenesisMethod

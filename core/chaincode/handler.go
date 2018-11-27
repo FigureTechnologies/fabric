@@ -9,6 +9,7 @@ package chaincode
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -162,6 +163,8 @@ type Handler struct {
 	chatStream ccintf.ChaincodeStream
 	// errChan is used to communicate errors from the async send to the receive loop
 	errChan chan error
+	// Metrics holds chaincode metrics
+	Metrics *HandlerMetrics
 }
 
 // handleMessage is called by ProcessStream to dispatch messages.
@@ -244,6 +247,7 @@ func (h *Handler) HandleTransaction(msg *pb.ChaincodeMessage, delegate handleFun
 		return
 	}
 
+	startTime := time.Now()
 	var txContext *TransactionContext
 	var err error
 	if msg.Type == pb.ChaincodeMessage_INVOKE_CHAINCODE {
@@ -251,6 +255,14 @@ func (h *Handler) HandleTransaction(msg *pb.ChaincodeMessage, delegate handleFun
 	} else {
 		txContext, err = h.isValidTxSim(msg.ChannelId, msg.Txid, "no ledger context")
 	}
+
+	chaincodeName := h.chaincodeID.Name + ":" + h.chaincodeID.Version
+	meterLabels := []string{
+		"type", msg.Type.String(),
+		"channel", msg.ChannelId,
+		"chaincode", chaincodeName,
+	}
+	h.Metrics.ShimRequestsReceived.With(meterLabels...).Add(1)
 
 	var resp *pb.ChaincodeMessage
 	if err == nil {
@@ -266,6 +278,10 @@ func (h *Handler) HandleTransaction(msg *pb.ChaincodeMessage, delegate handleFun
 	chaincodeLogger.Debugf("[%s] Completed %s. Sending %s", shorttxid(msg.Txid), msg.Type, resp.Type)
 	h.ActiveTransactions.Remove(msg.ChannelId, msg.Txid)
 	h.serialSendAsync(resp)
+
+	meterLabels = append(meterLabels, "success", strconv.FormatBool(resp.Type != pb.ChaincodeMessage_ERROR))
+	h.Metrics.ShimRequestDuration.With(meterLabels...).Observe(time.Since(startTime).Seconds())
+	h.Metrics.ShimRequestsCompleted.With(meterLabels...).Add(1)
 }
 
 func shorttxid(txid string) string {
@@ -560,7 +576,6 @@ func (h *Handler) checkMetadataCap(msg *pb.ChaincodeMessage) error {
 
 // Handles query to ledger to get state
 func (h *Handler) HandleGetState(msg *pb.ChaincodeMessage, txContext *TransactionContext) (*pb.ChaincodeMessage, error) {
-	key := string(msg.Payload)
 	getState := &pb.GetState{}
 	err := proto.Unmarshal(msg.Payload, getState)
 	if err != nil {
@@ -580,7 +595,7 @@ func (h *Handler) HandleGetState(msg *pb.ChaincodeMessage, txContext *Transactio
 		return nil, errors.WithStack(err)
 	}
 	if res == nil {
-		chaincodeLogger.Debugf("[%s] No state associated with key: %s. Sending %s with an empty payload", shorttxid(msg.Txid), key, pb.ChaincodeMessage_RESPONSE)
+		chaincodeLogger.Debugf("[%s] No state associated with key: %s. Sending %s with an empty payload", shorttxid(msg.Txid), getState.Key, pb.ChaincodeMessage_RESPONSE)
 	}
 
 	// Send response msg back to chaincode. GetState will not trigger event
@@ -1137,7 +1152,7 @@ func (h *Handler) setChaincodeProposal(signedProp *pb.SignedProposal, prop *pb.P
 		return errors.New("failed getting proposal context. Signed proposal is nil")
 	}
 	// TODO: This doesn't make a lot of sense. Feels like both are required or
-	// neither should be set. Check with a knowledable expert.
+	// neither should be set. Check with a knowledgeable expert.
 	if prop != nil {
 		msg.Proposal = signedProp
 	}

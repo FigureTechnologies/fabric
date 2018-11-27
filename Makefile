@@ -46,8 +46,8 @@
 
 BASE_VERSION = 1.4.0
 PREV_VERSION = 1.3.0
-CHAINTOOL_RELEASE=1.1.1
-BASEIMAGE_RELEASE=0.4.12
+CHAINTOOL_RELEASE=1.1.3
+BASEIMAGE_RELEASE=0.4.14
 
 # Allow to build as a submodule setting the main project to
 # the PROJECT_NAME env variable, for example,
@@ -57,14 +57,9 @@ PROJECT_NAME = $(PROJECT_NAME)/fabric
 else
 PROJECT_NAME = hyperledger/fabric
 endif
-EXPERIMENTAL ?= true
 
 BUILD_DIR ?= .build
 NEXUS_REPO = nexus3.hyperledger.org:10001/hyperledger
-
-ifeq ($(EXPERIMENTAL),true)
-GO_TAGS += experimental
-endif
 
 EXTRA_VERSION ?= $(shell git rev-parse --short HEAD)
 PROJECT_VERSION=$(BASE_VERSION)-snapshot-$(EXTRA_VERSION)
@@ -81,7 +76,6 @@ METADATA_VAR += BaseVersion=$(BASEIMAGE_RELEASE)
 METADATA_VAR += BaseDockerLabel=$(BASE_DOCKER_LABEL)
 METADATA_VAR += DockerNamespace=$(DOCKER_NS)
 METADATA_VAR += BaseDockerNamespace=$(BASE_DOCKER_NS)
-METADATA_VAR += Experimental=$(EXPERIMENTAL)
 
 GO_LDFLAGS = $(patsubst %,-X $(PKGNAME)/common/metadata.%,$(METADATA_VAR))
 
@@ -96,15 +90,14 @@ K := $(foreach exec,$(EXECUTABLES),\
 	$(if $(shell which $(exec)),some string,$(error "No $(exec) in PATH: Check dependencies")))
 
 GOSHIM_DEPS = $(shell ./scripts/goListFiles.sh $(PKGNAME)/core/chaincode/shim)
-JAVASHIM_DEPS =  $(shell git ls-files core/chaincode/shim/java)
-PROTOS = $(shell git ls-files *.proto | grep -v vendor)
+PROTOS = $(shell git ls-files *.proto | grep -Ev 'vendor/|testdata/')
 # No sense rebuilding when non production code is changed
 PROJECT_FILES = $(shell git ls-files  | grep -v ^test | grep -v ^unit-test | \
 	grep -v ^.git | grep -v ^examples | grep -v ^devenv | grep -v .png$ | \
 	grep -v ^LICENSE | grep -v ^vendor )
 RELEASE_TEMPLATES = $(shell git ls-files | grep "release/templates")
-IMAGES = peer orderer ccenv buildenv testenv tools
-RELEASE_PLATFORMS = windows-amd64 darwin-amd64 linux-amd64 linux-s390x
+IMAGES = peer orderer ccenv buildenv tools
+RELEASE_PLATFORMS = windows-amd64 darwin-amd64 linux-amd64 linux-s390x linux-ppc64le
 RELEASE_PKGS = configtxgen cryptogen idemixgen discover configtxlator peer orderer
 
 pkgmap.cryptogen      := $(PKGNAME)/common/tools/cryptogen
@@ -180,27 +173,24 @@ tools-docker: $(BUILD_DIR)/image/tools/$(DUMMY)
 
 buildenv: $(BUILD_DIR)/image/buildenv/$(DUMMY)
 
-$(BUILD_DIR)/image/testenv/$(DUMMY): $(BUILD_DIR)/image/buildenv/$(DUMMY)
-testenv: $(BUILD_DIR)/image/testenv/$(DUMMY)
 ccenv: $(BUILD_DIR)/image/ccenv/$(DUMMY)
 
 .PHONY: integration-test
 integration-test: gotool.ginkgo ccenv docker-thirdparty
 	./scripts/run-integration-tests.sh
 
-unit-test: unit-test-clean peer-docker testenv ccenv
-	cd unit-test && docker-compose up --abort-on-container-exit --force-recreate && docker-compose down
+unit-test: unit-test-clean peer-docker docker-thirdparty ccenv
+	unit-test/run.sh
 
 unit-tests: unit-test
 
-enable_ci_only_tests: testenv
-	cd unit-test && docker-compose up --abort-on-container-exit --force-recreate && docker-compose down
+enable_ci_only_tests: unit-test
 
-verify: unit-test-clean peer-docker testenv
-	cd unit-test && JOB_TYPE=VERIFY docker-compose up --abort-on-container-exit --force-recreate && docker-compose down
+verify: export JOB_TYPE=VERIFY
+verify: unit-test
 
-profile: unit-test-clean peer-docker testenv
-	cd unit-test && JOB_TYPE=PROFILE docker-compose up --abort-on-container-exit --force-recreate && docker-compose down
+profile: export JOB_TYPE=PROFILE
+profile: unit-test
 
 # Generates a string to the terminal suitable for manual augmentation / re-issue, useful for running tests by hand
 test-cmd:
@@ -271,10 +261,6 @@ $(BUILD_DIR)/image/orderer/payload:    $(BUILD_DIR)/docker/bin/orderer \
 				$(BUILD_DIR)/sampleconfig.tar.bz2
 $(BUILD_DIR)/image/buildenv/payload:   $(BUILD_DIR)/gotools.tar.bz2 \
 				$(BUILD_DIR)/docker/gotools/bin/protoc-gen-go
-$(BUILD_DIR)/image/testenv/payload:    $(BUILD_DIR)/docker/bin/orderer \
-				$(BUILD_DIR)/docker/bin/peer \
-				$(BUILD_DIR)/sampleconfig.tar.bz2 \
-				images/testenv/install-softhsm2.sh
 
 $(BUILD_DIR)/image/%/payload:
 	mkdir -p $@
@@ -323,7 +309,6 @@ $(BUILD_DIR)/goshim.tar.bz2: $(GOSHIM_DEPS)
 $(BUILD_DIR)/sampleconfig.tar.bz2: $(shell find sampleconfig -type f)
 	(cd sampleconfig && tar -jc *) > $@
 
-$(BUILD_DIR)/javashim.tar.bz2: $(JAVASHIM_DEPS)
 $(BUILD_DIR)/protos.tar.bz2: $(PROTOS)
 
 $(BUILD_DIR)/%.tar.bz2:
@@ -352,6 +337,9 @@ release/linux-%: GOOS=linux
 
 release/linux-s390x: GOARCH=s390x
 release/linux-s390x: $(patsubst %,release/linux-s390x/bin/%, $(RELEASE_PKGS)) release/linux-s390x/install
+
+release/linux-ppc64le: GOARCH=ppc64le
+release/linux-ppc64le: $(patsubst %,release/linux-ppc64le/bin/%, $(RELEASE_PKGS)) release/linux-ppc64le/install
 
 release/%/bin/configtxlator: $(PROJECT_FILES)
 	@echo "Building $@ for $(GOOS)-$(GOARCH)"
@@ -458,6 +446,7 @@ dist-clean:
 	-@rm -rf release/darwin-amd64/hyperledger-fabric-darwin-amd64.$(PROJECT_VERSION).tar.gz
 	-@rm -rf release/linux-amd64/hyperledger-fabric-linux-amd64.$(PROJECT_VERSION).tar.gz
 	-@rm -rf release/linux-s390x/hyperledger-fabric-linux-s390x.$(PROJECT_VERSION).tar.gz
+	-@rm -rf release/linux-ppc64le/hyperledger-fabric-linux-ppc64le.$(PROJECT_VERSION).tar.gz
 
 %-release-clean:
 	$(eval TARGET = ${patsubst %-release-clean,%,${@}})
