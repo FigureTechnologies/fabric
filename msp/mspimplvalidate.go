@@ -179,17 +179,20 @@ func (msp *bccspmsp) validateIdentityOUsV11(id *identity) error {
 		var nodeOU *OUIdentifier
 		switch OU.OrganizationalUnitIdentifier {
 		case msp.clientOU.OrganizationalUnitIdentifier:
+			mspLogger.Debugf("Identity matches clientOU identifier [%s] in %s", OU.OrganizationalUnitIdentifier, msp.name)
 			nodeOU = msp.clientOU
 		case msp.peerOU.OrganizationalUnitIdentifier:
+			mspLogger.Debugf("Identity matches peerOU [%s] in %s", OU.OrganizationalUnitIdentifier, msp.name)
 			nodeOU = msp.peerOU
 		default:
+			mspLogger.Debugf("Identity OU [%s] not matched in %s", OU.OrganizationalUnitIdentifier, msp.name)
 			continue
 		}
 
 		// Yes. Then, enforce the certifiers identifier is this is specified.
 		// It is not specified, it means that any certification path is fine.
 		if len(nodeOU.CertifiersIdentifier) != 0 && !bytes.Equal(nodeOU.CertifiersIdentifier, OU.CertifiersIdentifier) {
-			return errors.Errorf("certifiersIdentifier does not match: [%v], MSP: [%s]", id.GetOrganizationalUnits(), msp.name)
+			return errors.Errorf("CertifiersIdentifier [%v] not matched in MSP: [%s]", id.GetOrganizationalUnits(), msp.name)
 		}
 		counter++
 		if counter > 1 {
@@ -198,8 +201,9 @@ func (msp *bccspmsp) validateIdentityOUsV11(id *identity) error {
 	}
 	if counter != 1 {
 		return errors.Errorf("the identity must be a client, a peer or an orderer identity to be valid, not a combination of them. OUs: [%v], MSP: [%s]", id.GetOrganizationalUnits(), msp.name)
+	} else if counter == 0 {
+		return errors.Errorf("the identity is incompatible with the specified nodeOU configuration for MSP [%s]", msp.name)
 	}
-
 	return nil
 }
 
