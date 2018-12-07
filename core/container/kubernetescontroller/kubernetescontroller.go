@@ -156,7 +156,8 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 
 	envvars := []apiv1.EnvVar{}
 	for _, v := range env {
-		ss := strings.Split(v, "=")
+		// Use splitN(.., .., 2) here to handle base64 encoded strings coming in thru env.
+		ss := strings.SplitN(v, "=", 2)
 		kubernetesLogger.Debugf("create chaincode deployment: add env %s = %s", ss[0], ss[1])
 		envvars = append(envvars, apiv1.EnvVar{Name: ss[0], Value: ss[1]})
 	}
