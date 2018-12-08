@@ -110,7 +110,9 @@ func (r *Replicator) ReplicateChains() {
 		r.PullChannel(channel)
 	}
 	// Last, pull the system chain
-	r.PullChannel(r.SystemChannel)
+	if err := r.PullChannel(r.SystemChannel); err != nil {
+		r.Logger.Panicf("Failed pulling system channel: %v", err)
+	}
 	r.LedgerFactory.Close()
 }
 
@@ -209,7 +211,7 @@ func (r *Replicator) channelsToPull(channels []string) []string {
 		puller.Close()
 		// Restore the previous buffer size
 		puller.MaxTotalBufferBytes = bufferSize
-		if err == NotInChannelError {
+		if err == ErrNotInChannel {
 			r.Logger.Info("I do not belong to channel", channel, ", skipping chain retrieval")
 			continue
 		}
@@ -305,8 +307,8 @@ type ChainInspector struct {
 	LastConfigBlock *common.Block
 }
 
-// NotInChannelError denotes that an ordering node is not in the channel
-var NotInChannelError = errors.New("not in the channel")
+// ErrNotInChannel denotes that an ordering node is not in the channel
+var ErrNotInChannel = errors.New("not in the channel")
 
 // selfMembershipPredicate determines whether the caller is found in the given config block
 type selfMembershipPredicate func(configBlock *common.Block) error
@@ -353,14 +355,21 @@ func lastConfigFromBlock(block *common.Block) (uint64, error) {
 	return utils.GetLastConfigIndexFromBlock(block)
 }
 
+// Close closes the ChainInspector
+func (ci *ChainInspector) Close() {
+	ci.Puller.Close()
+}
+
 // Channels returns the list of channels
 // that exist in the chain
 func (ci *ChainInspector) Channels() []string {
 	channels := make(map[string]struct{})
 	lastConfigBlockNum := ci.LastConfigBlock.Header.Number
 	var block *common.Block
+	var prevHash []byte
 	for seq := uint64(1); seq < lastConfigBlockNum; seq++ {
 		block = ci.Puller.PullBlock(seq)
+		ci.validateHashPointer(block, prevHash)
 		channel, err := IsNewChannelBlock(block)
 		if err != nil {
 			// If we failed to classify a block, something is wrong in the system chain
@@ -368,6 +377,8 @@ func (ci *ChainInspector) Channels() []string {
 			ci.Logger.Panic("Failed classifying block", seq, ":", err)
 			continue
 		}
+		// Set the previous hash for the next iteration
+		prevHash = block.Header.Hash()
 		if channel == "" {
 			ci.Logger.Info("Block", seq, "doesn't contain a new channel")
 			continue
@@ -386,6 +397,17 @@ func (ci *ChainInspector) Channels() []string {
 	}
 
 	return flattenChannelMap(channels)
+}
+
+func (ci *ChainInspector) validateHashPointer(block *common.Block, prevHash []byte) {
+	if prevHash == nil {
+		return
+	}
+	if bytes.Equal(block.Header.PreviousHash, prevHash) {
+		return
+	}
+	ci.Logger.Panicf("Claimed previous hash of block %d is %x but actual previous hash is %x",
+		block.Header.Number, block.Header.PreviousHash, prevHash)
 }
 
 func flattenChannelMap(m map[string]struct{}) []string {

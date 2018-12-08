@@ -6,8 +6,6 @@ SPDX-License-Identifier: Apache-2.0
 package handlers
 
 import (
-	"reflect"
-
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/pkg/errors"
 )
@@ -34,11 +32,8 @@ func (c *CredentialRequestSigner) Sign(k bccsp.Key, digest []byte, opts bccsp.Si
 	if !ok {
 		return nil, errors.New("invalid options, expected IssuerPK as *issuerPublicKey")
 	}
-	if !reflect.DeepEqual(digest, bccsp.IdemixEmptyDigest()) {
-		return nil, errors.New("invalid digest, the idemix empty digest is expected")
-	}
 
-	return c.CredRequest.Sign(userSecretKey.sk, issuerPK.pk)
+	return c.CredRequest.Sign(userSecretKey.sk, issuerPK.pk, credentialRequestSignerOpts.IssuerNonce)
 }
 
 // CredentialRequestVerifier verifies credential requests
@@ -52,11 +47,12 @@ func (c *CredentialRequestVerifier) Verify(k bccsp.Key, signature, digest []byte
 	if !ok {
 		return false, errors.New("invalid key, expected *issuerPublicKey")
 	}
-	if !reflect.DeepEqual(digest, bccsp.IdemixEmptyDigest()) {
-		return false, errors.New("invalid digest, the idemix empty digest is expected")
+	credentialRequestSignerOpts, ok := opts.(*bccsp.IdemixCredentialRequestSignerOpts)
+	if !ok {
+		return false, errors.New("invalid options, expected *IdemixCredentialRequestSignerOpts")
 	}
 
-	err := c.CredRequest.Verify(signature, issuerPublicKey.pk)
+	err := c.CredRequest.Verify(signature, issuerPublicKey.pk, credentialRequestSignerOpts.IssuerNonce)
 	if err != nil {
 		return false, err
 	}
@@ -105,9 +101,6 @@ func (v *CredentialVerifier) Verify(k bccsp.Key, signature, digest []byte, opts 
 	ipk, ok := credOpts.IssuerPK.(*issuerPublicKey)
 	if !ok {
 		return false, errors.New("invalid issuer public key, expected *issuerPublicKey")
-	}
-	if !reflect.DeepEqual(digest, bccsp.IdemixEmptyDigest()) {
-		return false, errors.New("invalid digest, the idemix empty digest is expected")
 	}
 	if len(signature) == 0 {
 		return false, errors.New("invalid signature, it must not be empty")

@@ -87,8 +87,7 @@ func TestIsReplicationNeeded(t *testing.T) {
 func TestReplicateChainsFailures(t *testing.T) {
 	for _, testCase := range []struct {
 		name                    string
-		blocks                  []*common.Block
-		expectedError           string
+		isProbeResponseDelayed  bool
 		latestBlockSeqInOrderer uint64
 		ledgerFactoryError      error
 		appendBlockError        error
@@ -96,18 +95,21 @@ func TestReplicateChainsFailures(t *testing.T) {
 		mutateBlocks            func([]*common.Block)
 	}{
 		{
-			name:          "no block received",
-			expectedError: "failed obtaining the latest block for channel system",
+			name: "no block received",
+			expectedPanic: "Failed pulling system channel: " +
+				"failed obtaining the latest block for channel system",
 		},
 		{
 			name: "latest block seq is less than boot block seq",
-			expectedError: "latest height found among system channel(system) orderers is 19," +
+			expectedPanic: "Failed pulling system channel: " +
+				"latest height found among system channel(system) orderers is 19," +
 				" but the boot block's sequence is 21",
 			latestBlockSeqInOrderer: 18,
 		},
 		{
 			name: "hash chain mismatch",
-			expectedError: "block header mismatch on sequence 11, " +
+			expectedPanic: "Failed pulling system channel: " +
+				"block header mismatch on sequence 11, " +
 				"expected 9cd61b7e9a5ea2d128cc877e5304e7205888175a8032d40b97db7412dca41d9e, got 010203",
 			latestBlockSeqInOrderer: 21,
 			mutateBlocks: func(systemChannelBlocks []*common.Block) {
@@ -136,6 +138,13 @@ func TestReplicateChainsFailures(t *testing.T) {
 			appendBlockError:        errors.New("IO error"),
 			expectedPanic:           "Failed to write block 0: IO error",
 		},
+		{
+			name:                    "failure pulling the system chain",
+			latestBlockSeqInOrderer: 21,
+			expectedPanic: "Failed pulling system channel: " +
+				"failed obtaining the latest block for channel system",
+			isProbeResponseDelayed: true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			systemChannelBlocks := createBlockChain(0, 21)
@@ -156,18 +165,25 @@ func TestReplicateChainsFailures(t *testing.T) {
 			bp := newBlockPuller(dialer, osn.srv.Address())
 			bp.FetchTimeout = time.Millisecond * 100
 
+			cl := &mocks.ChannelLister{}
+			cl.On("Channels").Return(nil)
+			cl.On("Close")
+
 			r := cluster.Replicator{
 				Logger:        flogging.MustGetLogger("test"),
 				BootBlock:     systemChannelBlocks[21],
 				SystemChannel: "system",
 				LedgerFactory: lf,
 				Puller:        bp,
+				ChannelLister: cl,
 			}
 
+			if !testCase.isProbeResponseDelayed {
+				osn.enqueueResponse(testCase.latestBlockSeqInOrderer)
+				osn.enqueueResponse(testCase.latestBlockSeqInOrderer)
+			}
 			osn.addExpectProbeAssert()
-			osn.enqueueResponse(testCase.latestBlockSeqInOrderer)
 			osn.addExpectProbeAssert()
-			osn.enqueueResponse(testCase.latestBlockSeqInOrderer)
 			osn.addExpectPullAssert(0)
 			for _, block := range systemChannelBlocks {
 				osn.blockResponses <- &orderer.DeliverResponse{
@@ -175,15 +191,7 @@ func TestReplicateChainsFailures(t *testing.T) {
 				}
 			}
 
-			if testCase.expectedPanic == "" {
-				err := r.PullChannel("system")
-				assert.EqualError(t, err, testCase.expectedError)
-			} else {
-				assert.PanicsWithValue(t, testCase.expectedPanic, func() {
-					r.PullChannel("system")
-				})
-			}
-
+			assert.PanicsWithValue(t, testCase.expectedPanic, r.ReplicateChains)
 			bp.Close()
 			dialer.assertAllConnectionsClosed(t)
 		})
@@ -303,7 +311,7 @@ func TestReplicateChainsGreenPath(t *testing.T) {
 	// For channel A
 	amIPartOfChannelMock.On("func2").Return(nil).Once()
 	// For channel B
-	amIPartOfChannelMock.On("func2").Return(cluster.NotInChannelError).Once()
+	amIPartOfChannelMock.On("func2").Return(cluster.ErrNotInChannel).Once()
 
 	// 22 is for the system channel, and 31 is for channel A
 	blocksCommittedToLedger := make(chan *common.Block, 22+31)
@@ -512,7 +520,7 @@ func TestParticipant(t *testing.T) {
 			},
 			latestConfigBlockSeq: 42,
 			latestConfigBlock:    &common.Block{Header: &common.BlockHeader{Number: 42}},
-			predicateReturns:     cluster.NotInChannelError,
+			predicateReturns:     cluster.ErrNotInChannel,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1031,12 +1039,29 @@ func TestChannels(t *testing.T) {
 			},
 		},
 		{
-			name:               "bad path - pulled chain's hash is mismatched",
-			prepareSystemChain: func(_ []*common.Block) {},
+			name: "bad path - pulled chain's last block hash doesn't match the last config block",
+			prepareSystemChain: func(systemChain []*common.Block) {
+				assignHashes(systemChain)
+				systemChain[len(systemChain)-1].Header.PreviousHash = nil
+			},
 			assertion: func(t *testing.T, ci *cluster.ChainInspector) {
 				panicValue := "System channel pulled doesn't match the boot last config block:" +
-					" block 4's hash (d8553eb97aa57e3c795a185f30efdbe8d88ae4b1e44b984b311159beac9bd5f4)" +
+					" block 4's hash (34762d9deefdea2514a85663856e92b5c7e1ae4669e6265b27b079d1f320e741)" +
 					" mismatches 3's prev block hash ()"
+				assert.PanicsWithValue(t, panicValue, func() {
+					ci.Channels()
+				})
+			},
+		},
+		{
+			name: "bad path - hash chain mismatch",
+			prepareSystemChain: func(systemChain []*common.Block) {
+				assignHashes(systemChain)
+				systemChain[len(systemChain)/2].Header.PreviousHash = nil
+			},
+			assertion: func(t *testing.T, ci *cluster.ChainInspector) {
+				panicValue := "Claimed previous hash of block 3 is  but actual previous " +
+					"hash is ab6be2effec106c0324f9d6b1af2cf115c60c3f60e250658362991cb8e195a50"
 				assert.PanicsWithValue(t, panicValue, func() {
 					ci.Channels()
 				})
@@ -1072,6 +1097,7 @@ func TestChannels(t *testing.T) {
 			}
 			testCase.prepareSystemChain(systemChain)
 			puller := &mocks.ChainPuller{}
+			puller.On("Close")
 			for seq := uint64(1); int(seq) <= len(systemChain); seq++ {
 				puller.On("PullBlock", seq).Return(systemChain[int(seq)-1])
 			}
@@ -1081,6 +1107,8 @@ func TestChannels(t *testing.T) {
 				Puller:          puller,
 				LastConfigBlock: systemChain[len(systemChain)-1],
 			}
+			defer puller.AssertNumberOfCalls(t, "Close", 1)
+			defer ci.Close()
 			testCase.assertion(t, ci)
 		})
 	}

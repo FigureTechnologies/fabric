@@ -13,7 +13,10 @@ import (
 	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/metrics/metricsfakes"
 	lgr "github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr"
 	"github.com/hyperledger/fabric/core/ledger/mock"
+	"github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,27 +43,27 @@ func TestStatsBlockchainHeight(t *testing.T) {
 	fakeBlockchainHeightGauge := testMetricProvider.fakeBlockchainHeightGauge
 	// calls during ledger creation
 	assert.Equal(t, float64(0), fakeBlockchainHeightGauge.SetArgsForCall(0))
-	assert.Equal(t, []string{"channel_name", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(0))
+	assert.Equal(t, []string{"channel", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(0))
 
 	// calls during committing genesis block
 	assert.Equal(t, float64(1), fakeBlockchainHeightGauge.SetArgsForCall(1))
-	assert.Equal(t, []string{"channel_name", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(1))
+	assert.Equal(t, []string{"channel", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(1))
 
 	ledger.Close()
 	provider.Open(ledgerid)
 	// calls during opening an existing ledger - opening a ledger should set the current height
 	assert.Equal(t, float64(1), fakeBlockchainHeightGauge.SetArgsForCall(2))
-	assert.Equal(t, []string{"channel_name", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(2))
+	assert.Equal(t, []string{"channel", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(2))
 
 	// invoke updateBlockStats api explicitly and verify the calls with fake metrics
 	ledger.updateBlockStats(
-		10, 1*time.Second, 2*time.Second, 3*time.Second,
+		10, 1*time.Second, 2*time.Second, 3*time.Second, nil,
 	)
-	assert.Equal(t, []string{"channel_name", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(3))
+	assert.Equal(t, []string{"channel", ledgerid}, fakeBlockchainHeightGauge.WithArgsForCall(3))
 	assert.Equal(t, float64(11), fakeBlockchainHeightGauge.SetArgsForCall(3))
 }
 
-func TestStatsBlockCommitTimings(t *testing.T) {
+func TestStatsBlockCommit(t *testing.T) {
 	env := newTestEnv(t)
 	defer env.cleanup()
 	testMetricProvider := testutilConstructMetricProvider()
@@ -81,31 +84,95 @@ func TestStatsBlockCommitTimings(t *testing.T) {
 	defer ledger.Close()
 
 	// calls during committing genesis block
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeBlockProcessingTimeHist.WithArgsForCall(0))
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeBlockstorageCommitTimeHist.WithArgsForCall(0))
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeStatedbCommitTimeHist.WithArgsForCall(0))
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeBlockProcessingTimeHist.WithArgsForCall(0),
+	)
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeBlockstorageCommitTimeHist.WithArgsForCall(0),
+	)
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeStatedbCommitTimeHist.WithArgsForCall(0),
+	)
+	assert.Equal(t,
+		[]string{
+			"channel", ledgerid,
+			"transaction_type", common.HeaderType_CONFIG.String(),
+			"chaincode", "unknown",
+			"validation_code", peer.TxValidationCode_VALID.String(),
+		},
+		testMetricProvider.fakeTransactionsCount.WithArgsForCall(0),
+	)
 
 	// invoke updateBlockStats api explicitly and verify the calls with fake metrics
 	ledger.updateBlockStats(
 		10, 1*time.Second, 2*time.Second, 3*time.Second,
+		[]*txmgr.TxStatInfo{
+			{
+				ValidationCode: peer.TxValidationCode_VALID,
+				TxType:         common.HeaderType_ENDORSER_TRANSACTION,
+				ChaincodeID:    &peer.ChaincodeID{Name: "mycc", Version: "1.0"},
+				NumCollections: 2,
+			},
+			{
+				ValidationCode: peer.TxValidationCode_INVALID_OTHER_REASON,
+				TxType:         -1,
+			},
+		},
 	)
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeBlockProcessingTimeHist.WithArgsForCall(1))
-	assert.Equal(t, float64(1),
-		testMetricProvider.fakeBlockProcessingTimeHist.ObserveArgsForCall(1))
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeBlockProcessingTimeHist.WithArgsForCall(1),
+	)
+	assert.Equal(t,
+		float64(1),
+		testMetricProvider.fakeBlockProcessingTimeHist.ObserveArgsForCall(1),
+	)
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeBlockstorageCommitTimeHist.WithArgsForCall(1),
+	)
+	assert.Equal(t,
+		float64(2),
+		testMetricProvider.fakeBlockstorageCommitTimeHist.ObserveArgsForCall(1),
+	)
+	assert.Equal(t,
+		[]string{"channel", ledgerid},
+		testMetricProvider.fakeStatedbCommitTimeHist.WithArgsForCall(1),
+	)
+	assert.Equal(t,
+		float64(3),
+		testMetricProvider.fakeStatedbCommitTimeHist.ObserveArgsForCall(1),
+	)
+	assert.Equal(t,
+		[]string{
+			"channel", ledgerid,
+			"transaction_type", common.HeaderType_ENDORSER_TRANSACTION.String(),
+			"chaincode", "mycc:1.0",
+			"validation_code", peer.TxValidationCode_VALID.String(),
+		},
+		testMetricProvider.fakeTransactionsCount.WithArgsForCall(1),
+	)
+	assert.Equal(t,
+		float64(1),
+		testMetricProvider.fakeTransactionsCount.AddArgsForCall(1),
+	)
 
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeBlockstorageCommitTimeHist.WithArgsForCall(1))
-	assert.Equal(t, float64(2),
-		testMetricProvider.fakeBlockstorageCommitTimeHist.ObserveArgsForCall(1))
-
-	assert.Equal(t, []string{"channel_name", ledgerid},
-		testMetricProvider.fakeStatedbCommitTimeHist.WithArgsForCall(1))
-	assert.Equal(t, float64(3),
-		testMetricProvider.fakeStatedbCommitTimeHist.ObserveArgsForCall(1))
+	assert.Equal(t,
+		[]string{
+			"channel", ledgerid,
+			"transaction_type", "unknown",
+			"chaincode", "unknown",
+			"validation_code", peer.TxValidationCode_INVALID_OTHER_REASON.String(),
+		},
+		testMetricProvider.fakeTransactionsCount.WithArgsForCall(2),
+	)
+	assert.Equal(t,
+		float64(1),
+		testMetricProvider.fakeTransactionsCount.AddArgsForCall(2),
+	)
 }
 
 type testMetricProvider struct {

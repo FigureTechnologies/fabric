@@ -15,6 +15,7 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/common/util"
 	lgr "github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr"
 	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	ledgertestutil "github.com/hyperledger/fabric/core/ledger/testutil"
 	"github.com/hyperledger/fabric/protos/common"
@@ -185,6 +186,11 @@ func TestKVLedgerBlockStorageWithPvtdata(t *testing.T) {
 }
 
 func TestKVLedgerDBRecovery(t *testing.T) {
+	testSyncStateAndHistoryDBWithBlockstore(t)
+	testSyncStateDBWithPvtdatastore(t)
+}
+
+func testSyncStateAndHistoryDBWithBlockstore(t *testing.T) {
 	env := newTestEnv(t)
 	defer env.cleanup()
 	provider := testutilNewProviderWithCollectionConfig(t,
@@ -223,7 +229,8 @@ func TestKVLedgerDBRecovery(t *testing.T) {
 		map[string]string{"key1": "value1.2", "key2": "value2.2", "key3": "value3.2"},
 		map[string]string{"key1": "pvtValue1.2", "key2": "pvtValue2.2", "key3": "pvtValue3.2"})
 
-	assert.NoError(t, ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata2, true))
+	_, err := ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata2, true)
+	assert.NoError(t, err)
 	assert.NoError(t, ledger.(*kvLedger).blockStore.CommitWithPvtData(blockAndPvtdata2))
 
 	// block storage should be as of block-2 but the state and history db should be as of block-1
@@ -272,7 +279,8 @@ func TestKVLedgerDBRecovery(t *testing.T) {
 		map[string]string{"key1": "value1.3", "key2": "value2.3", "key3": "value3.3"},
 		map[string]string{"key1": "pvtValue1.3", "key2": "pvtValue2.3", "key3": "pvtValue3.3"},
 	)
-	assert.NoError(t, ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata3, true))
+	_, err = ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata3, true)
+	assert.NoError(t, err)
 	assert.NoError(t, ledger.(*kvLedger).blockStore.CommitWithPvtData(blockAndPvtdata3))
 	// committing the transaction to state DB
 	assert.NoError(t, ledger.(*kvLedger).txtmgmt.Commit())
@@ -324,8 +332,8 @@ func TestKVLedgerDBRecovery(t *testing.T) {
 		map[string]string{"key1": "value1.4", "key2": "value2.4", "key3": "value3.4"},
 		map[string]string{"key1": "pvtValue1.4", "key2": "pvtValue2.4", "key3": "pvtValue3.4"},
 	)
-
-	assert.NoError(t, ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata4, true))
+	_, err = ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(blockAndPvtdata4, true)
+	assert.NoError(t, err)
 	assert.NoError(t, ledger.(*kvLedger).blockStore.CommitWithPvtData(blockAndPvtdata4))
 	assert.NoError(t, ledger.(*kvLedger).historyDB.Commit(blockAndPvtdata4.Block))
 
@@ -364,6 +372,67 @@ func TestKVLedgerDBRecovery(t *testing.T) {
 			historyVals:        []string{"value1.1", "value1.2", "value1.3", "value1.4"},
 		},
 	)
+}
+
+func testSyncStateDBWithPvtdatastore(t *testing.T) {
+	env := newTestEnv(t)
+	defer env.cleanup()
+	provider := testutilNewProviderWithCollectionConfig(t,
+		"ns", map[string]uint64{"coll": 0},
+	)
+	defer provider.Close()
+	testLedgerid := "testLedger"
+	bg, gb := testutil.NewBlockGenerator(t, testLedgerid, false)
+	ledger, _ := provider.Create(gb)
+	defer ledger.Close()
+
+	// create and commit two data block (both with missing pvtdata)
+	blockAndPvtdata1, pvtdata1 := prepareNextBlockWithMissingPvtDataForTest(t, ledger, bg, "SimulateForBlk1",
+		map[string]string{"key1": "value1.1", "key2": "value2.1", "key3": "value3.1"},
+		map[string]string{"key1": "pvtValue1.1", "key2": "pvtValue2.1", "key3": "pvtValue3.1"})
+
+	assert.NoError(t, ledger.CommitWithPvtData(blockAndPvtdata1))
+
+	blockAndPvtdata2, pvtdata2 := prepareNextBlockWithMissingPvtDataForTest(t, ledger, bg, "SimulateForBlk2",
+		map[string]string{"key1": "value1.2", "key2": "value2.2", "key3": "value3.2"},
+		map[string]string{"key1": "pvtValue1.2", "key2": "pvtValue2.2", "key3": "pvtValue3.2"})
+
+	assert.NoError(t, ledger.CommitWithPvtData(blockAndPvtdata2))
+
+	txSim, err := ledger.NewTxSimulator("test")
+	assert.NoError(t, err)
+	value, err := txSim.GetPrivateData("ns", "coll", "key1")
+	_, ok := err.(*txmgr.ErrPvtdataNotAvailable)
+	assert.True(t, ok)
+	assert.Nil(t, value)
+
+	blocksPvtData := map[uint64][]*lgr.TxPvtData{
+		1: {
+			pvtdata1,
+		},
+		2: {
+			pvtdata2,
+		},
+	}
+
+	assert.NoError(t, ledger.(*kvLedger).blockStore.CommitPvtDataOfOldBlocks(blocksPvtData))
+
+	// Now, assume that peer fails here before committing the pvtData to stateDB
+	ledger.Close()
+	provider.Close()
+
+	// Here the peer comes online and calls NewKVLedger to get a handler for the ledger
+	// StateDB and HistoryDB should be recovered before returning from NewKVLedger call
+	provider = testutilNewProviderWithCollectionConfig(t,
+		"ns", map[string]uint64{"coll": 0},
+	)
+	ledger, _ = provider.Open(testLedgerid)
+
+	txSim, err = ledger.NewTxSimulator("test")
+	assert.NoError(t, err)
+	value, err = txSim.GetPrivateData("ns", "coll", "key1")
+	assert.NoError(t, err)
+	assert.Equal(t, value, []byte("pvtValue1.2"))
 }
 
 func TestLedgerWithCouchDbEnabledWithBinaryAndJSONData(t *testing.T) {
@@ -480,6 +549,21 @@ func TestLedgerWithCouchDbEnabledWithBinaryAndJSONData(t *testing.T) {
 		assert.Equal(t, expectedValue, retrievedValue)
 
 	}
+}
+
+func prepareNextBlockWithMissingPvtDataForTest(t *testing.T, l lgr.PeerLedger, bg *testutil.BlockGenerator,
+	txid string, pubKVs map[string]string, pvtKVs map[string]string) (*lgr.BlockAndPvtData, *lgr.TxPvtData) {
+
+	blockAndPvtData := prepareNextBlockForTest(t, l, bg, txid, pubKVs, pvtKVs)
+
+	blkMissingDataInfo := make(lgr.TxMissingPvtDataMap)
+	blkMissingDataInfo.Add(0, "ns", "coll", true)
+	blockAndPvtData.MissingPvtData = blkMissingDataInfo
+
+	pvtData := blockAndPvtData.PvtData[0]
+	delete(blockAndPvtData.PvtData, 0)
+
+	return blockAndPvtData, pvtData
 }
 
 func prepareNextBlockForTest(t *testing.T, l lgr.PeerLedger, bg *testutil.BlockGenerator,

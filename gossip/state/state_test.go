@@ -241,7 +241,7 @@ func (*mockCommitter) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker, 
 	panic("implement me")
 }
 
-func (*mockCommitter) CommitPvtData(blockPvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
+func (*mockCommitter) CommitPvtDataOfOldBlocks(blockPvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
 	panic("implement me")
 }
 
@@ -257,7 +257,7 @@ func (mock *ramLedger) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker,
 	panic("implement me")
 }
 
-func (mock *ramLedger) CommitPvtData(blockPvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
+func (mock *ramLedger) CommitPvtDataOfOldBlocks(blockPvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
 	panic("implement me")
 }
 
@@ -336,6 +336,7 @@ func newGossipConfig(portPrefix, id int, boot ...int) *gossip.Config {
 		PublishCertPeriod:          10 * time.Second,
 		RequestStateInfoInterval:   4 * time.Second,
 		PublishStateInfoInterval:   4 * time.Second,
+		TimeForMembershipTracker:   5 * time.Second,
 	}
 }
 

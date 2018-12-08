@@ -104,6 +104,16 @@ func (l *kvLedger) initBlockStore(btlPolicy pvtdatapolicy.BTLPolicy) {
 //by recommitting last valid blocks
 func (l *kvLedger) recoverDBs() error {
 	logger.Debugf("Entering recoverDB()")
+	if err := l.syncStateAndHistoryDBWithBlockstore(); err != nil {
+		return err
+	}
+	if err := l.syncStateDBWithPvtdatastore(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *kvLedger) syncStateAndHistoryDBWithBlockstore() error {
 	//If there is no block in blockstorage, nothing to recover.
 	info, _ := l.blockStore.GetBlockchainInfo()
 	if info.Height == 0 {
@@ -144,6 +154,29 @@ func (l *kvLedger) recoverDBs() error {
 	// get both the db upto block storage
 	return l.recommitLostBlocks(recoverers[1].firstBlockNum, lastAvailableBlockNum,
 		recoverers[0].recoverable, recoverers[1].recoverable)
+}
+
+func (l *kvLedger) syncStateDBWithPvtdatastore() error {
+	// TODO: So far, the design philosophy was that the scope of block storage is
+	// limited to storing and retrieving blocks data with certain guarantees and statedb is
+	// for the state management. The higher layer, 'kvledger', coordinates the acts between
+	// the two. However, with maintaining the state of the consumption of blocks (i.e,
+	// lastUpdatedOldBlockList for pvtstore reconciliation) within private data block storage
+	// breaks that assumption. The knowledge of what blocks have been consumed for the purpose
+	// of state update should not lie with the source (i.e., pvtdatastorage). A potential fix
+	// is mentioned in FAB-12731
+	blocksPvtData, err := l.blockStore.GetLastUpdatedOldBlocksPvtData()
+	if err != nil {
+		return err
+	}
+	if err := l.txtmgmt.RemoveStaleAndCommitPvtDataOfOldBlocks(blocksPvtData); err != nil {
+		return err
+	}
+	if err := l.blockStore.ResetLastUpdatedOldBlocksList(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 //recommitLostBlocks retrieves blocks in specified range and commit the write set to either
@@ -266,7 +299,7 @@ func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) er
 
 	startBlockProcessing := time.Now()
 	logger.Debugf("[%s] Validating state for block [%d]", l.ledgerID, blockNo)
-	err = l.txtmgmt.ValidateAndPrepare(pvtdataAndBlock, true)
+	txstatsInfo, err := l.txtmgmt.ValidateAndPrepare(pvtdataAndBlock, true)
 	if err != nil {
 		return err
 	}
@@ -310,6 +343,7 @@ func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) er
 		elapsedBlockProcessing,
 		elapsedCommitBlockStorage,
 		elapsedCommitState,
+		txstatsInfo,
 	)
 	return nil
 }
@@ -319,11 +353,13 @@ func (l *kvLedger) updateBlockStats(
 	blockProcessingTime time.Duration,
 	blockstorageCommitTime time.Duration,
 	statedbCommitTime time.Duration,
+	txstatsInfo []*txmgr.TxStatInfo,
 ) {
 	l.stats.updateBlockchainHeight(blockNum + 1)
 	l.stats.updateBlockProcessingTime(blockProcessingTime)
 	l.stats.updateBlockstorageCommitTime(blockstorageCommitTime)
 	l.stats.updateStatedbCommitTime(statedbCommitTime)
+	l.stats.updateTransactionsStats(txstatsInfo)
 }
 
 // GetMissingPvtDataInfoForMostRecentBlocks returns the missing private data information for the
@@ -366,8 +402,7 @@ func (l *kvLedger) GetConfigHistoryRetriever() (ledger.ConfigHistoryRetriever, e
 	return l.configHistoryRetriever, nil
 }
 
-// TODO: FAB-12849 rename CommitPvtData() ledger API to CommitPvtDataOfOldBlocks()
-func (l *kvLedger) CommitPvtData(pvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
+func (l *kvLedger) CommitPvtDataOfOldBlocks(pvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
 	validPvtData, hashMismatches, err := ConstructValidAndInvalidPvtData(pvtData, l.blockStore)
 	if err != nil {
 		return nil, err

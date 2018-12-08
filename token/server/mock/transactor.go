@@ -9,6 +9,10 @@ import (
 )
 
 type Transactor struct {
+	DoneStub        func()
+	doneMutex       sync.RWMutex
+	doneArgsForCall []struct {
+	}
 	ListTokensStub        func() (*token.UnspentTokens, error)
 	listTokensMutex       sync.RWMutex
 	listTokensArgsForCall []struct {
@@ -31,6 +35,19 @@ type Transactor struct {
 		result2 error
 	}
 	requestApproveReturnsOnCall map[int]struct {
+		result1 *token.TokenTransaction
+		result2 error
+	}
+	RequestExpectationStub        func(*token.ExpectationRequest) (*token.TokenTransaction, error)
+	requestExpectationMutex       sync.RWMutex
+	requestExpectationArgsForCall []struct {
+		arg1 *token.ExpectationRequest
+	}
+	requestExpectationReturns struct {
+		result1 *token.TokenTransaction
+		result2 error
+	}
+	requestExpectationReturnsOnCall map[int]struct {
 		result1 *token.TokenTransaction
 		result2 error
 	}
@@ -75,6 +92,29 @@ type Transactor struct {
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
+}
+
+func (fake *Transactor) Done() {
+	fake.doneMutex.Lock()
+	fake.doneArgsForCall = append(fake.doneArgsForCall, struct {
+	}{})
+	fake.recordInvocation("Done", []interface{}{})
+	fake.doneMutex.Unlock()
+	if fake.DoneStub != nil {
+		fake.DoneStub()
+	}
+}
+
+func (fake *Transactor) DoneCallCount() int {
+	fake.doneMutex.RLock()
+	defer fake.doneMutex.RUnlock()
+	return len(fake.doneArgsForCall)
+}
+
+func (fake *Transactor) DoneCalls(stub func()) {
+	fake.doneMutex.Lock()
+	defer fake.doneMutex.Unlock()
+	fake.DoneStub = stub
 }
 
 func (fake *Transactor) ListTokens() (*token.UnspentTokens, error) {
@@ -190,6 +230,69 @@ func (fake *Transactor) RequestApproveReturnsOnCall(i int, result1 *token.TokenT
 		})
 	}
 	fake.requestApproveReturnsOnCall[i] = struct {
+		result1 *token.TokenTransaction
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *Transactor) RequestExpectation(arg1 *token.ExpectationRequest) (*token.TokenTransaction, error) {
+	fake.requestExpectationMutex.Lock()
+	ret, specificReturn := fake.requestExpectationReturnsOnCall[len(fake.requestExpectationArgsForCall)]
+	fake.requestExpectationArgsForCall = append(fake.requestExpectationArgsForCall, struct {
+		arg1 *token.ExpectationRequest
+	}{arg1})
+	fake.recordInvocation("RequestExpectation", []interface{}{arg1})
+	fake.requestExpectationMutex.Unlock()
+	if fake.RequestExpectationStub != nil {
+		return fake.RequestExpectationStub(arg1)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	fakeReturns := fake.requestExpectationReturns
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *Transactor) RequestExpectationCallCount() int {
+	fake.requestExpectationMutex.RLock()
+	defer fake.requestExpectationMutex.RUnlock()
+	return len(fake.requestExpectationArgsForCall)
+}
+
+func (fake *Transactor) RequestExpectationCalls(stub func(*token.ExpectationRequest) (*token.TokenTransaction, error)) {
+	fake.requestExpectationMutex.Lock()
+	defer fake.requestExpectationMutex.Unlock()
+	fake.RequestExpectationStub = stub
+}
+
+func (fake *Transactor) RequestExpectationArgsForCall(i int) *token.ExpectationRequest {
+	fake.requestExpectationMutex.RLock()
+	defer fake.requestExpectationMutex.RUnlock()
+	argsForCall := fake.requestExpectationArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *Transactor) RequestExpectationReturns(result1 *token.TokenTransaction, result2 error) {
+	fake.requestExpectationMutex.Lock()
+	defer fake.requestExpectationMutex.Unlock()
+	fake.RequestExpectationStub = nil
+	fake.requestExpectationReturns = struct {
+		result1 *token.TokenTransaction
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *Transactor) RequestExpectationReturnsOnCall(i int, result1 *token.TokenTransaction, result2 error) {
+	fake.requestExpectationMutex.Lock()
+	defer fake.requestExpectationMutex.Unlock()
+	fake.RequestExpectationStub = nil
+	if fake.requestExpectationReturnsOnCall == nil {
+		fake.requestExpectationReturnsOnCall = make(map[int]struct {
+			result1 *token.TokenTransaction
+			result2 error
+		})
+	}
+	fake.requestExpectationReturnsOnCall[i] = struct {
 		result1 *token.TokenTransaction
 		result2 error
 	}{result1, result2}
@@ -387,10 +490,14 @@ func (fake *Transactor) RequestTransferFromReturnsOnCall(i int, result1 *token.T
 func (fake *Transactor) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
+	fake.doneMutex.RLock()
+	defer fake.doneMutex.RUnlock()
 	fake.listTokensMutex.RLock()
 	defer fake.listTokensMutex.RUnlock()
 	fake.requestApproveMutex.RLock()
 	defer fake.requestApproveMutex.RUnlock()
+	fake.requestExpectationMutex.RLock()
+	defer fake.requestExpectationMutex.RUnlock()
 	fake.requestRedeemMutex.RLock()
 	defer fake.requestRedeemMutex.RUnlock()
 	fake.requestTransferMutex.RLock()

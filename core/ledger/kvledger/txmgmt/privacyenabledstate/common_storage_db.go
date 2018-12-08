@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/ledger/cceventmgmt"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
@@ -37,11 +38,11 @@ type CommonStorageDBProvider struct {
 }
 
 // NewCommonStorageDBProvider constructs an instance of DBProvider
-func NewCommonStorageDBProvider(bookkeeperProvider bookkeeping.Provider) (DBProvider, error) {
+func NewCommonStorageDBProvider(bookkeeperProvider bookkeeping.Provider, metricsProvider metrics.Provider) (DBProvider, error) {
 	var vdbProvider statedb.VersionedDBProvider
 	var err error
 	if ledgerconfig.IsCouchDBEnabled() {
-		if vdbProvider, err = statecouchdb.NewVersionedDBProvider(); err != nil {
+		if vdbProvider, err = statecouchdb.NewVersionedDBProvider(metricsProvider); err != nil {
 			return nil, err
 		}
 	} else {
@@ -98,7 +99,7 @@ func (s *CommonStorageDB) LoadCommittedVersionsOfPubAndHashedKeys(pubKeys []*sta
 		ns := deriveHashedDataNs(key.Namespace, key.CollectionName)
 		// No need to check for duplicates as hashedKeys are in separate namespace
 		var keyHashStr string
-		if !s.BytesKeySuppoted() {
+		if !s.BytesKeySupported() {
 			keyHashStr = base64.StdEncoding.EncodeToString([]byte(key.KeyHash))
 		} else {
 			keyHashStr = key.KeyHash
@@ -142,7 +143,7 @@ func (s *CommonStorageDB) GetPrivateData(namespace, collection, key string) (*st
 // GetValueHash implements corresponding function in interface DB
 func (s *CommonStorageDB) GetValueHash(namespace, collection string, keyHash []byte) (*statedb.VersionedValue, error) {
 	keyHashStr := string(keyHash)
-	if !s.BytesKeySuppoted() {
+	if !s.BytesKeySupported() {
 		keyHashStr = base64.StdEncoding.EncodeToString(keyHash)
 	}
 	return s.GetState(deriveHashedDataNs(namespace, collection), keyHashStr)
@@ -151,7 +152,7 @@ func (s *CommonStorageDB) GetValueHash(namespace, collection string, keyHash []b
 // GetKeyHashVersion implements corresponding function in interface DB
 func (s *CommonStorageDB) GetKeyHashVersion(namespace, collection string, keyHash []byte) (*version.Height, error) {
 	keyHashStr := string(keyHash)
-	if !s.BytesKeySuppoted() {
+	if !s.BytesKeySupported() {
 		keyHashStr = base64.StdEncoding.EncodeToString(keyHash)
 	}
 	return s.GetVersion(deriveHashedDataNs(namespace, collection), keyHashStr)
@@ -165,7 +166,7 @@ func (s *CommonStorageDB) GetCachedKeyHashVersion(namespace, collection string, 
 	}
 
 	keyHashStr := string(keyHash)
-	if !s.BytesKeySuppoted() {
+	if !s.BytesKeySupported() {
 		keyHashStr = base64.StdEncoding.EncodeToString(keyHash)
 	}
 	return bulkOptimizable.GetCachedVersion(deriveHashedDataNs(namespace, collection), keyHashStr)
@@ -197,7 +198,7 @@ func (s *CommonStorageDB) ApplyPrivacyAwareUpdates(updates *UpdateBatch, height 
 	// combinedUpdates includes both updates to public db and private db, which are partitioned by a separate namespace
 	combinedUpdates := updates.PubUpdates
 	addPvtUpdates(combinedUpdates, updates.PvtUpdates)
-	addHashedUpdates(combinedUpdates, updates.HashUpdates, !s.BytesKeySuppoted())
+	addHashedUpdates(combinedUpdates, updates.HashUpdates, !s.BytesKeySupported())
 	s.metadataHint.setMetadataUsedFlag(updates)
 	return s.VersionedDB.ApplyUpdates(combinedUpdates.UpdateBatch, height)
 }

@@ -151,7 +151,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	Describe("basic single node etcdraft network with 2 orgs", func() {
+	PDescribe("basic single node etcdraft network with 2 orgs", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -172,7 +172,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	Describe("three node etcdraft network with 2 orgs", func() {
+	PDescribe("three node etcdraft network with 2 orgs", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.MultiNodeEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -250,7 +250,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	Describe("etcd raft, checking valid configuration update of type B", func() {
+	PDescribe("etcd raft, checking valid configuration update of type B", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -299,7 +299,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	Describe("basic single node etcdraft network with 2 orgs and 2 channels", func() {
+	PDescribe("basic single node etcdraft network with 2 orgs and 2 channels", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.MultiChannelEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -318,7 +318,7 @@ var _ = Describe("EndToEnd", func() {
 			nwo.DeployChaincode(network, "testchannel1", orderer, chaincode)
 
 			network.CreateAndJoinChannel(orderer, "testchannel2")
-			nwo.DeployChaincode(network, "testchannel2", orderer, chaincode)
+			nwo.InstantiateChaincode(network, "testchannel2", orderer, chaincode, peer)
 
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel1")
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel2")
@@ -468,7 +468,7 @@ func CheckPeerOperationEndpoints(network *nwo.Network, peer *nwo.Peer) {
 
 	authClient, unauthClient := PeerOperationalClients(network, peer)
 
-	CheckPeerPometheusMetrics(authClient, metricsURL)
+	CheckPeerPrometheusMetrics(authClient, metricsURL)
 	CheckLogspecOperations(authClient, logspecURL)
 	CheckHealthEndpoint(authClient, healthURL)
 
@@ -488,7 +488,7 @@ func CheckOrdererOperationEndpoints(network *nwo.Network, orderer *nwo.Orderer) 
 
 	authClient, unauthClient := OrdererOperationalClients(network, orderer)
 
-	CheckOrdererPometheusMetrics(authClient, metricsURL)
+	CheckOrdererPrometheusMetrics(authClient, metricsURL)
 	CheckLogspecOperations(authClient, logspecURL)
 	CheckHealthEndpoint(authClient, healthURL)
 
@@ -501,7 +501,7 @@ func CheckOrdererOperationEndpoints(network *nwo.Network, orderer *nwo.Orderer) 
 	CheckHealthEndpoint(unauthClient, healthURL)
 }
 
-func CheckPeerPometheusMetrics(client *http.Client, url string) {
+func CheckPeerPrometheusMetrics(client *http.Client, url string) {
 	By("hitting the prometheus metrics endpoint")
 	resp, err := client.Get(url)
 	Expect(err).NotTo(HaveOccurred())
@@ -521,7 +521,7 @@ func CheckPeerPometheusMetrics(client *http.Client, url string) {
 	Expect(body).To(ContainSubstring(`# TYPE grpc_comm_conn_opened counter`))
 }
 
-func CheckOrdererPometheusMetrics(client *http.Client, url string) {
+func CheckOrdererPrometheusMetrics(client *http.Client, url string) {
 	By("hitting the prometheus metrics endpoint")
 	resp, err := client.Get(url)
 	Expect(err).NotTo(HaveOccurred())

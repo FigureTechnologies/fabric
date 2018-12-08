@@ -37,8 +37,8 @@ func TestNoItemsToReconcile(t *testing.T) {
 	committer.On("GetMissingPvtDataTracker").Return(missingPvtDataTracker, nil)
 	fetcher.On("FetchReconciledItems", mock.Anything).Return(nil, errors.New("this function shouldn't be called"))
 
-	r := &reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, isEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
-	err := r.reconcile()
+	r := &Reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, IsEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
+	_, _, _, err := r.reconcile()
 
 	assert.NoError(t, err)
 }
@@ -73,8 +73,8 @@ func TestNotReconcilingWhenCollectionConfigNotAvailable(t *testing.T) {
 		fetchCalled = true
 	}).Return(nil, errors.New("called with no digests"))
 
-	r := &reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, isEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
-	err := r.reconcile()
+	r := &Reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, IsEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
+	_, _, _, err := r.reconcile()
 
 	assert.Error(t, err)
 	assert.Equal(t, "called with no digests", err.Error())
@@ -133,25 +133,25 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 		}
 	}).Return(result, nil)
 
-	var commitPvtDataHappened bool
+	var commitPvtDataOfOldBlocksHappened bool
 	var blockNum, seqInBlock uint64
 	blockNum = 3
 	seqInBlock = 1
-	committer.On("CommitPvtData", mock.Anything).Run(func(args mock.Arguments) {
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Run(func(args mock.Arguments) {
 		var blockPvtData = args.Get(0).([]*ledger.BlockPvtData)
 		assert.Equal(t, 1, len(blockPvtData))
 		assert.Equal(t, blockNum, blockPvtData[0].BlockNum)
 		assert.Equal(t, seqInBlock, blockPvtData[0].WriteSets[1].SeqInBlock)
 		assert.Equal(t, "ns1", blockPvtData[0].WriteSets[1].WriteSet.NsPvtRwset[0].Namespace)
 		assert.Equal(t, "col1", blockPvtData[0].WriteSets[1].WriteSet.NsPvtRwset[0].CollectionPvtRwset[0].CollectionName)
-		commitPvtDataHappened = true
+		commitPvtDataOfOldBlocksHappened = true
 	}).Return([]*ledger.PvtdataHashMismatch{}, nil)
 
-	r := &reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, isEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
-	err := r.reconcile()
+	r := &Reconciler{config: &ReconcilerConfig{sleepInterval: time.Minute, batchSize: 1, IsEnabled: true}, ReconciliationFetcher: fetcher, Committer: committer}
+	_, _, _, err := r.reconcile()
 
 	assert.NoError(t, err)
-	assert.True(t, commitPvtDataHappened)
+	assert.True(t, commitPvtDataOfOldBlocksHappened)
 }
 
 func TestReconciliationHappyPathWithScheduler(t *testing.T) {
@@ -209,25 +209,25 @@ func TestReconciliationHappyPathWithScheduler(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	var commitPvtDataHappened bool
+	var commitPvtDataOfOldBlocksHappened bool
 	var blockNum, seqInBlock uint64
 	blockNum = 3
 	seqInBlock = 1
-	committer.On("CommitPvtData", mock.Anything).Run(func(args mock.Arguments) {
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Run(func(args mock.Arguments) {
 		var blockPvtData = args.Get(0).([]*ledger.BlockPvtData)
 		assert.Equal(t, 1, len(blockPvtData))
 		assert.Equal(t, blockNum, blockPvtData[0].BlockNum)
 		assert.Equal(t, seqInBlock, blockPvtData[0].WriteSets[1].SeqInBlock)
 		assert.Equal(t, "ns1", blockPvtData[0].WriteSets[1].WriteSet.NsPvtRwset[0].Namespace)
 		assert.Equal(t, "col1", blockPvtData[0].WriteSets[1].WriteSet.NsPvtRwset[0].CollectionPvtRwset[0].CollectionName)
-		commitPvtDataHappened = true
+		commitPvtDataOfOldBlocksHappened = true
 		wg.Done()
 	}).Return([]*ledger.PvtdataHashMismatch{}, nil)
 
-	r := NewReconciler(committer, fetcher, &ReconcilerConfig{sleepInterval: time.Millisecond * 100, batchSize: 1, isEnabled: true})
+	r := NewReconciler(committer, fetcher, &ReconcilerConfig{sleepInterval: time.Millisecond * 100, batchSize: 1, IsEnabled: true})
 	r.Start()
 	wg.Wait()
 	r.Stop()
 
-	assert.True(t, commitPvtDataHappened)
+	assert.True(t, commitPvtDataOfOldBlocksHappened)
 }

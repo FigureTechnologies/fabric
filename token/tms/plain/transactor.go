@@ -295,6 +295,19 @@ func (t *Transactor) RequestTransferFrom(request *token.TransferRequest) (*token
 	panic("implement me!")
 }
 
+// RequestExpectation allows indirect transfer based on the expectation.
+// It creates a token transaction based on the outputs as specified in the expectation.
+func (t *Transactor) RequestExpectation(request *token.ExpectationRequest) (*token.TokenTransaction, error) {
+	panic("not implemented yet")
+}
+
+// Done releases any resources held by this transactor
+func (t *Transactor) Done() {
+	if t.Ledger != nil {
+		t.Ledger.Done()
+	}
+}
+
 // isSpent checks whether an output token with identifier outputID has been spent.
 func (t *Transactor) isSpent(outputID string) (bool, error) {
 	key, err := createInputKey(outputID)

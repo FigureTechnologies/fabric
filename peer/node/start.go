@@ -95,14 +95,12 @@ const (
 )
 
 var chaincodeDevMode bool
-var orderingEndpoint string
 
 func startCmd() *cobra.Command {
 	// Set the flags on the node start command.
 	flags := nodeStartCmd.Flags()
 	flags.BoolVarP(&chaincodeDevMode, "peer-chaincodedev", "", false,
 		"Whether peer in chaincode development mode")
-	flags.StringVarP(&orderingEndpoint, "orderer", "o", "orderer:7050", "Ordering service endpoint")
 
 	return nodeStartCmd
 }
@@ -249,7 +247,7 @@ func serve(args []string) error {
 		}
 	}
 
-	abServer := peer.NewDeliverEventsServer(mutualTLS, policyCheckerProvider, &peer.DeliverChainManager{})
+	abServer := peer.NewDeliverEventsServer(mutualTLS, policyCheckerProvider, &peer.DeliverChainManager{}, metricsProvider)
 	pb.RegisterDeliverServer(peerServer.Server(), abServer)
 
 	// Initialize chaincode service
@@ -312,10 +310,11 @@ func serve(args []string) error {
 	defer service.GetGossipService().Stop()
 
 	// register prover grpc service
-	err = registerProverService(peerServer, aclProvider, signingIdentity)
-	if err != nil {
-		return err
-	}
+	// FAB-12971 disable prover service before v1.4 cut. Will uncomment after v1.4 cut
+	// err = registerProverService(peerServer, aclProvider, signingIdentity)
+	// if err != nil {
+	// 	return err
+	// }
 
 	// initialize system chaincodes
 
@@ -878,9 +877,6 @@ func newOperationsSystem() *operations.System {
 				Address:       viper.GetString("operations.metrics.statsd.address"),
 				WriteInterval: viper.GetDuration("operations.metrics.statsd.writeInterval"),
 				Prefix:        viper.GetString("operations.metrics.statsd.prefix"),
-			},
-			Prometheus: &operations.Prometheus{
-				HandlerPath: viper.GetString("operations.metrics.prometheus.handlerPath"),
 			},
 		},
 		TLS: operations.TLS{

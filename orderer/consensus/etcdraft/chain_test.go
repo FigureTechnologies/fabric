@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package etcdraft_test
 
 import (
+	"bytes"
 	"encoding/pem"
 	"fmt"
 	"io/ioutil"
@@ -19,6 +20,7 @@ import (
 	"code.cloudfoundry.org/clock/fakeclock"
 	"github.com/coreos/etcd/raft"
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/flogging"
 	mockconfig "github.com/hyperledger/fabric/common/mocks/config"
@@ -44,6 +46,10 @@ const (
 	HEARTBEAT_TICK      = 1
 )
 
+func init() {
+	factory.InitFactories(nil)
+}
+
 // for some test cases we chmod file/dir to test failures caused by exotic permissions.
 // however this does not work if tests are running as root, i.e. in a container.
 func skipIfRoot() {
@@ -56,11 +62,10 @@ func skipIfRoot() {
 
 var _ = Describe("Chain", func() {
 	var (
-		env         *common.Envelope
-		normalBlock *common.Block
-		channelID   string
-		tlsCA       tlsgen.CA
-		logger      *flogging.FabricLogger
+		env       *common.Envelope
+		channelID string
+		tlsCA     tlsgen.CA
+		logger    *flogging.FabricLogger
 	)
 
 	BeforeEach(func() {
@@ -72,11 +77,6 @@ var _ = Describe("Chain", func() {
 				Header: &common.Header{ChannelHeader: marshalOrPanic(&common.ChannelHeader{Type: int32(common.HeaderType_MESSAGE), ChannelId: channelID})},
 				Data:   []byte("TEST_MESSAGE"),
 			}),
-		}
-		normalBlock = &common.Block{
-			Header:   &common.BlockHeader{},
-			Data:     &common.BlockData{Data: [][]byte{[]byte("foo")}},
-			Metadata: &common.BlockMetadata{Metadata: make([][]byte, 4)},
 		}
 	})
 
@@ -119,6 +119,10 @@ var _ = Describe("Chain", func() {
 			})
 			cutter = mockblockcutter.NewReceiver()
 			support.BlockCutterReturns(cutter)
+
+			// for block creator initialization
+			support.HeightReturns(1)
+			support.BlockReturns(getSeedBlock())
 
 			meta := &raftprotos.RaftMetadata{
 				Consenters:      map[uint64]*raftprotos.Consenter{},
@@ -214,7 +218,6 @@ var _ = Describe("Chain", func() {
 
 			It("produces blocks following batch rules", func() {
 				close(cutter.Block)
-				support.CreateNextBlockReturns(normalBlock)
 
 				By("cutting next batch directly")
 				cutter.CutNext = true
@@ -235,7 +238,6 @@ var _ = Describe("Chain", func() {
 
 			It("does not reset timer for every envelope", func() {
 				close(cutter.Block)
-				support.CreateNextBlockReturns(normalBlock)
 
 				timeout := time.Second
 				support.SharedConfigReturns(&mockconfig.Orderer{BatchTimeoutVal: timeout})
@@ -274,7 +276,6 @@ var _ = Describe("Chain", func() {
 
 			It("stops the timer if a batch is cut", func() {
 				close(cutter.Block)
-				support.CreateNextBlockReturns(normalBlock)
 
 				timeout := time.Second
 				support.SharedConfigReturns(&mockconfig.Orderer{BatchTimeoutVal: timeout})
@@ -289,8 +290,10 @@ var _ = Describe("Chain", func() {
 				cutter.CutNext = true
 				err = chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
+
 				Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
-				Expect(support.CreateNextBlockArgsForCall(0)).To(HaveLen(2))
+				b, _ := support.WriteBlockArgsForCall(0)
+				Expect(b.Data.Data).To(HaveLen(2))
 				Expect(cutter.CurBatch()).To(HaveLen(0))
 
 				// this should start a fresh timer
@@ -303,13 +306,14 @@ var _ = Describe("Chain", func() {
 				Consistently(support.WriteBlockCallCount).Should(Equal(1))
 
 				clock.Increment(timeout / 2)
+
 				Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
-				Expect(support.CreateNextBlockArgsForCall(1)).To(HaveLen(1))
+				b, _ = support.WriteBlockArgsForCall(1)
+				Expect(b.Data.Data).To(HaveLen(1))
 			})
 
 			It("cut two batches if incoming envelope does not fit into first batch", func() {
 				close(cutter.Block)
-				support.CreateNextBlockReturns(normalBlock)
 
 				timeout := time.Second
 				support.SharedConfigReturns(&mockconfig.Orderer{BatchTimeoutVal: timeout})
@@ -322,14 +326,12 @@ var _ = Describe("Chain", func() {
 				err = chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
 
-				Eventually(support.CreateNextBlockCallCount, LongEventualTimeout).Should(Equal(2))
 				Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
 			})
 
 			Context("revalidation", func() {
 				BeforeEach(func() {
 					close(cutter.Block)
-					support.CreateNextBlockReturns(normalBlock)
 
 					timeout := time.Hour
 					support.SharedConfigReturns(&mockconfig.Orderer{BatchTimeoutVal: timeout})
@@ -361,9 +363,8 @@ var _ = Describe("Chain", func() {
 
 			Describe("Config updates", func() {
 				var (
-					configEnv   *common.Envelope
-					configSeq   uint64
-					configBlock *common.Block
+					configEnv *common.Envelope
+					configSeq uint64
 				)
 
 				Context("when a config update with invalid header comes", func() {
@@ -373,14 +374,6 @@ var _ = Describe("Chain", func() {
 							common.HeaderType_CONFIG_UPDATE, // invalid header; envelopes with CONFIG_UPDATE header never reach chain
 							&common.ConfigUpdateEnvelope{ConfigUpdate: []byte("test invalid envelope")})
 						configSeq = 0
-
-						configBlock = &common.Block{
-							Header: &common.BlockHeader{},
-							Data: &common.BlockData{
-								Data: [][]byte{marshalOrPanic(configEnv)},
-							},
-						}
-						support.CreateNextBlockReturns(configBlock)
 					})
 
 					It("should throw an error", func() {
@@ -390,17 +383,6 @@ var _ = Describe("Chain", func() {
 				})
 
 				Context("when a type A config update comes", func() {
-
-					// ensures that configBlock has the correct configEnv
-					JustBeforeEach(func() {
-						configBlock = &common.Block{
-							Header: &common.BlockHeader{},
-							Data: &common.BlockData{
-								Data: [][]byte{marshalOrPanic(configEnv)},
-							},
-						}
-						support.CreateNextBlockReturns(configBlock)
-					})
 
 					Context("for existing channel", func() {
 
@@ -436,8 +418,6 @@ var _ = Describe("Chain", func() {
 								It("should create a normal block and a config block", func() {
 									// We do not need to block the cutter from ordering in our test case and therefore close this channel.
 									close(cutter.Block)
-									support.CreateNextBlockReturnsOnCall(0, normalBlock)
-									support.CreateNextBlockReturnsOnCall(1, configBlock)
 
 									By("adding a normal envelope")
 									err := chain.Order(env, 0)
@@ -450,7 +430,6 @@ var _ = Describe("Chain", func() {
 									err = chain.Configure(configEnv, configSeq)
 									Expect(err).NotTo(HaveOccurred())
 
-									Eventually(support.CreateNextBlockCallCount, LongEventualTimeout).Should(Equal(2))
 									Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
 									Eventually(support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
 								})
@@ -516,13 +495,6 @@ var _ = Describe("Chain", func() {
 								newConfigUpdateEnv(channelID, values))
 							configSeq = 0
 
-							configBlock = &common.Block{
-								Header: &common.BlockHeader{},
-								Data: &common.BlockData{
-									Data: [][]byte{marshalOrPanic(configEnv)},
-								},
-							}
-							support.CreateNextBlockReturns(configBlock)
 						}) // BeforeEach block
 
 						It("should be able to process config update of type B", func() {
@@ -547,13 +519,6 @@ var _ = Describe("Chain", func() {
 								newConfigUpdateEnv(channelID, values))
 							configSeq = 0
 
-							configBlock = &common.Block{
-								Header: &common.BlockHeader{},
-								Data: &common.BlockData{
-									Data: [][]byte{marshalOrPanic(configEnv)},
-								},
-							}
-							support.CreateNextBlockReturns(configBlock)
 						}) // BeforeEach block
 
 						It("should fail, since consenters set change is not supported", func() {
@@ -585,14 +550,6 @@ var _ = Describe("Chain", func() {
 								newConfigUpdateEnv(channelID, values))
 							configSeq = 0
 
-							configBlock = &common.Block{
-								Header: &common.BlockHeader{},
-								Data: &common.BlockData{
-									Data: [][]byte{marshalOrPanic(configEnv)},
-								},
-							}
-							support.CreateNextBlockReturns(configBlock)
-
 							err := chain.Configure(configEnv, configSeq)
 							Expect(err).NotTo(HaveOccurred())
 						})
@@ -613,14 +570,6 @@ var _ = Describe("Chain", func() {
 								common.HeaderType_CONFIG,
 								newConfigUpdateEnv(channelID, values))
 							configSeq = 0
-
-							configBlock = &common.Block{
-								Header: &common.BlockHeader{},
-								Data: &common.BlockData{
-									Data: [][]byte{marshalOrPanic(configEnv)},
-								},
-							}
-							support.CreateNextBlockReturns(configBlock)
 
 							err := chain.Configure(configEnv, configSeq)
 							Expect(err).NotTo(HaveOccurred())
@@ -648,14 +597,6 @@ var _ = Describe("Chain", func() {
 								common.HeaderType_CONFIG,
 								newConfigUpdateEnv(channelID, values))
 							configSeq = 0
-
-							configBlock = &common.Block{
-								Header: &common.BlockHeader{},
-								Data: &common.BlockData{
-									Data: [][]byte{marshalOrPanic(configEnv)},
-								},
-							}
-							support.CreateNextBlockReturns(configBlock)
 
 							err := chain.Configure(configEnv, configSeq)
 							Expect(err).To(MatchError("update of more than one consenters at a time is not supported"))
@@ -695,7 +636,6 @@ var _ = Describe("Chain", func() {
 						// order several envelopes and then halt the chain.
 						close(cutter.Block)
 						cutter.CutNext = true
-						support.CreateNextBlockReturns(normalBlock)
 
 						// enque some data to be persisted on disk by raft
 						err := chain.Order(env, uint64(0))
@@ -739,7 +679,6 @@ var _ = Describe("Chain", func() {
 						campaign(c.clock, c.observe)
 
 						c.cutter.CutNext = true
-						c.support.CreateNextBlockReturns(normalBlock)
 
 						err := c.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
@@ -764,7 +703,6 @@ var _ = Describe("Chain", func() {
 						campaign(c.clock, c.observe)
 
 						c.cutter.CutNext = true
-						c.support.CreateNextBlockReturns(normalBlock)
 
 						err := c.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
@@ -784,7 +722,6 @@ var _ = Describe("Chain", func() {
 						campaign(c.clock, c.observe)
 
 						c.cutter.CutNext = true
-						c.support.CreateNextBlockReturns(normalBlock)
 
 						err := c.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
@@ -828,7 +765,6 @@ var _ = Describe("Chain", func() {
 
 						close(cutter.Block)
 						cutter.CutNext = true
-						support.CreateNextBlockReturns(normalBlock)
 
 						support.WriteBlockStub = func(b *common.Block, meta []byte) {
 							bytes, err := proto.Marshal(&common.Metadata{Value: meta})
@@ -841,6 +777,8 @@ var _ = Describe("Chain", func() {
 						}
 
 						support.HeightStub = func() uint64 {
+							ledgerLock.Lock()
+							defer ledgerLock.Unlock()
 							return uint64(len(ledger))
 						}
 					})
@@ -850,17 +788,11 @@ var _ = Describe("Chain", func() {
 						Expect(err).NotTo(HaveOccurred())
 						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
 
-						normalBlock.Header.Number++
 						err = chain.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
 						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
 
-						normalBlock.Header.Number++
-						err = chain.Order(env, uint64(0))
-						Expect(err).NotTo(HaveOccurred())
-						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
-
-						_, metadata := support.WriteBlockArgsForCall(2)
+						_, metadata := support.WriteBlockArgsForCall(1)
 						m = &raftprotos.RaftMetadata{}
 						proto.Unmarshal(metadata, m)
 					})
@@ -876,10 +808,9 @@ var _ = Describe("Chain", func() {
 						Eventually(opts.MemoryStorage.FirstIndex, LongEventualTimeout).Should(BeNumerically(">", 1))
 
 						// chain should still be functioning
-						normalBlock.Header.Number++
 						err = chain.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
-						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(4))
+						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
 					})
 
 					It("pauses chain if sync is in progress", func() {
@@ -926,7 +857,7 @@ var _ = Describe("Chain", func() {
 						Consistently(done).ShouldNot(Receive())
 						close(signal) // unblock block puller
 
-						Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
+						Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
 					})
 
 					It("restores snapshot w/o extra entries", func() {
@@ -951,7 +882,7 @@ var _ = Describe("Chain", func() {
 
 						raftMetadata.RaftIndex = m.RaftIndex
 						c := newChain(10*time.Second, channelID, dataDir, 1, raftMetadata)
-						c.support.HeightReturns(normalBlock.Header.Number + 1)
+						// c.support.HeightReturns(normalBlock.Header.Number + 1)
 
 						c.init()
 						c.Start()
@@ -974,7 +905,6 @@ var _ = Describe("Chain", func() {
 						}, LongEventualTimeout).Should(BeTrue())
 
 						c.cutter.CutNext = true
-						normalBlock.Header.Number++
 						err = c.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
 						Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
@@ -998,10 +928,9 @@ var _ = Describe("Chain", func() {
 						// expect storage to preserve SnapshotCatchUpEntries entries before snapshot
 						Expect(i).To(Equal(snapshot.Metadata.Index - opts.SnapshotCatchUpEntries + 1))
 
-						normalBlock.Header.Number++
 						err = chain.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
-						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(4))
+						Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
 
 						lasti, _ := opts.MemoryStorage.LastIndex()
 
@@ -1009,7 +938,7 @@ var _ = Describe("Chain", func() {
 
 						raftMetadata.RaftIndex = m.RaftIndex
 						c := newChain(10*time.Second, channelID, dataDir, 1, raftMetadata)
-						c.support.HeightReturns(normalBlock.Header.Number + 1)
+						c.support.HeightReturns(5)
 
 						c.init()
 						c.Start()
@@ -1030,7 +959,6 @@ var _ = Describe("Chain", func() {
 						}, LongEventualTimeout).Should(BeTrue())
 
 						c.cutter.CutNext = true
-						normalBlock.Header.Number++
 						err = c.Order(env, uint64(0))
 						Expect(err).NotTo(HaveOccurred())
 						Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
@@ -1053,18 +981,16 @@ var _ = Describe("Chain", func() {
 							Eventually(countFiles, LongEventualTimeout).Should(Equal(1))
 
 							// order another envelope. this should not trigger snapshot
-							normalBlock.Header.Number++
 							err = chain.Order(env, uint64(0))
 							Expect(err).NotTo(HaveOccurred())
-							Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(4))
+							Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
 
 							chain.Halt()
 
 							raftMetadata.RaftIndex = m.RaftIndex
 							c := newChain(10*time.Second, channelID, dataDir, 1, raftMetadata)
-							c.support.CreateNextBlockReturns(normalBlock)
 							// start chain at block 2 (height = 3)
-							c.support.HeightReturns(normalBlock.Header.Number)
+							c.support.HeightReturns(3)
 							c.opts.SnapInterval = 2
 
 							c.init()
@@ -1083,7 +1009,6 @@ var _ = Describe("Chain", func() {
 							}, LongEventualTimeout).Should(BeTrue())
 
 							c.cutter.CutNext = true
-							normalBlock.Header.Number++
 							err = c.Order(env, uint64(0))
 							Expect(err).NotTo(HaveOccurred())
 
@@ -1097,6 +1022,11 @@ var _ = Describe("Chain", func() {
 
 			Context("Invalid WAL dir", func() {
 				var support = &consensusmocks.FakeConsenterSupport{}
+				BeforeEach(func() {
+					// for block creator initialization
+					support.HeightReturns(1)
+					support.BlockReturns(getSeedBlock())
+				})
 
 				When("WAL dir is a file", func() {
 					It("replaces file with fresh WAL dir", func() {
@@ -1265,10 +1195,13 @@ var _ = Describe("Chain", func() {
 				c1.opts.SnapshotCatchUpEntries = 1
 
 				c1.cutter.CutNext = true
-				// c1.support.CreateNextBlockReturns(normalBlock)
 
+				var blocksLock sync.Mutex
 				blocks := make(map[uint64]*common.Block) // storing written blocks for block puller
+
 				c1.support.WriteBlockStub = func(b *common.Block, meta []byte) {
+					blocksLock.Lock()
+					defer blocksLock.Unlock()
 					bytes, err := proto.Marshal(&common.Metadata{Value: meta})
 					Expect(err).NotTo(HaveOccurred())
 					b.Metadata.Metadata[common.BlockMetadataIndex_ORDERER] = bytes
@@ -1276,6 +1209,8 @@ var _ = Describe("Chain", func() {
 				}
 
 				c3.puller.PullBlockStub = func(i uint64) *common.Block {
+					blocksLock.Lock()
+					defer blocksLock.Unlock()
 					b, exist := blocks[i]
 					if !exist {
 						return nil
@@ -1295,7 +1230,6 @@ var _ = Describe("Chain", func() {
 				Eventually(func() int { return c2.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(1))
 				Eventually(func() int { return c3.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(0))
 
-				normalBlock.Header.Number++
 				err = c1.Order(env, 0)
 				Expect(err).ToNot(HaveOccurred())
 
@@ -1397,9 +1331,6 @@ var _ = Describe("Chain", func() {
 					By("adding new consenter into configuration")
 					configEnv := newConfigEnv(channelID, common.HeaderType_CONFIG, newConfigUpdateEnv(channelID, value))
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(&common.Block{
-						Header: &common.BlockHeader{},
-						Data:   &common.BlockData{Data: [][]byte{marshalOrPanic(configEnv)}}})
 
 					By("sending config transaction")
 					err := c1.Configure(configEnv, 0)
@@ -1419,9 +1350,6 @@ var _ = Describe("Chain", func() {
 
 					configEnv := newConfigEnv(channelID, common.HeaderType_CONFIG, newConfigUpdateEnv(channelID, addConsenterConfigValue()))
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(&common.Block{
-						Header: &common.BlockHeader{},
-						Data:   &common.BlockData{Data: [][]byte{marshalOrPanic(configEnv)}}})
 
 					By("sending config transaction")
 					err := c1.Configure(configEnv, 0)
@@ -1448,7 +1376,6 @@ var _ = Describe("Chain", func() {
 
 					By("submitting new transaction to follower")
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(normalBlock)
 					err = c4.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1479,9 +1406,6 @@ var _ = Describe("Chain", func() {
 
 					configEnv := newConfigEnv(channelID, common.HeaderType_CONFIG, newConfigUpdateEnv(channelID, addConsenterConfigValue()))
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(&common.Block{
-						Header: &common.BlockHeader{},
-						Data:   &common.BlockData{Data: [][]byte{marshalOrPanic(configEnv)}}})
 
 					By("sending config transaction")
 					err := c1.Configure(configEnv, 0)
@@ -1509,7 +1433,6 @@ var _ = Describe("Chain", func() {
 
 					By("submitting new transaction to follower")
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(normalBlock)
 					err = c4.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1529,13 +1452,96 @@ var _ = Describe("Chain", func() {
 
 					By("submitting new transaction to re-connected node")
 					c4.cutter.CutNext = true
-					c4.support.CreateNextBlockReturns(normalBlock)
 					err = c2.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 
 					network.exec(func(c *chain) {
 						Eventually(c.support.WriteBlockCallCount, defaultTimeout).Should(Equal(3))
 					})
+				})
+
+				It("stop leader and continue reconfiguration failing over to new leader", func() {
+					// Scenario: Starting replica set of 3 Raft nodes, electing node c1 to be a leader
+					// configure chain support mock to disconnect c1 right after it writes configuration block
+					// into the ledger, this to simulate failover.
+					// Next boostraping a new node c4 to join a cluster and creating config transaction, submitting
+					// it to the leader. Once leader writes configuration block it fails and leadership transferred to
+					// c2.
+					// Test asserts that new node c4, will join the cluster and c2 will handle failover of
+					// re-configuration. Later we connecting c1 back and making sure it capable of catching up with
+					// new configuration and successfully rejoins replica set.
+
+					c4 := newChain(timeout, channelID, dataDir, 4, &raftprotos.RaftMetadata{
+						Consenters: map[uint64]*raftprotos.Consenter{},
+					})
+					c4.init()
+
+					By("adding new node to the network")
+					Expect(c4.support.WriteBlockCallCount()).Should(Equal(0))
+					Expect(c4.support.WriteConfigBlockCallCount()).Should(Equal(0))
+
+					configEnv := newConfigEnv(channelID, common.HeaderType_CONFIG, newConfigUpdateEnv(channelID, addConsenterConfigValue()))
+					c1.cutter.CutNext = true
+					configBlock := &common.Block{
+						Header: &common.BlockHeader{},
+						Data:   &common.BlockData{Data: [][]byte{marshalOrPanic(configEnv)}}}
+
+					c1.support.WriteConfigBlockStub = func(_ *common.Block, _ []byte) {
+						// disconnect leader after block being committed
+						network.disconnect(1)
+						// electing new leader
+						network.elect(2)
+					}
+
+					// mock Block method to return recent configuration block
+					c2.support.BlockReturns(configBlock)
+
+					By("sending config transaction")
+					err := c1.Configure(configEnv, 0)
+					Expect(err).ToNot(HaveOccurred())
+
+					// every node has written config block to the OSN ledger
+					network.exec(
+						func(c *chain) {
+							Eventually(c.support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
+						})
+
+					network.addChain(c4)
+					c4.Start()
+					// ConfChange is applied to etcd/raft asynchronously, meaning node 4 is not added
+					// to leader's node list right away. An immediate tick does not trigger a heartbeat
+					// being sent to node 4. Therefore, we repeatedly tick the leader until node 4 joins
+					// the cluster successfully.
+					Eventually(func() <-chan uint64 {
+						c2.clock.Increment(interval)
+						return c4.observe
+					}, LongEventualTimeout).Should(Receive(Equal(uint64(2))))
+
+					Eventually(c4.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
+					Eventually(c4.support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
+
+					By("submitting new transaction to follower")
+					c2.cutter.CutNext = true
+					err = c4.Order(env, 0)
+					Expect(err).ToNot(HaveOccurred())
+
+					c2.clock.Increment(interval)
+
+					// rest nodes are alive include a newly added, hence should write 2 blocks
+					Eventually(c2.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
+					Eventually(c3.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
+					Eventually(c4.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
+
+					// node 1 has been stopped should not write any block
+					Consistently(c1.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
+
+					network.connect(1)
+
+					c2.clock.Increment(interval)
+					// check that former leader didn't get stuck and actually got resign signal,
+					// and once connected capable of communicating with rest of the replicas set
+					Eventually(c1.observe, LongEventualTimeout).Should(Receive(Equal(uint64(2))))
+					Eventually(c1.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
 				})
 			})
 		})
@@ -1564,7 +1570,6 @@ var _ = Describe("Chain", func() {
 
 				By("respect batch timeout")
 				c1.cutter.CutNext = false
-				c1.support.CreateNextBlockReturns(normalBlock)
 
 				err = c1.Order(env, 0)
 				Expect(err).ToNot(HaveOccurred())
@@ -1590,7 +1595,6 @@ var _ = Describe("Chain", func() {
 
 				By("respect batch timeout")
 				c1.cutter.CutNext = false
-				c1.support.CreateNextBlockReturns(normalBlock)
 
 				err = c2.Order(env, 0)
 				Expect(err).ToNot(HaveOccurred())
@@ -1601,6 +1605,106 @@ var _ = Describe("Chain", func() {
 					func(c *chain) {
 						Eventually(func() int { return c.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(2))
 					})
+			})
+
+			It("allows the leader to create multiple normal blocks without having to wait for them to be written out", func() {
+				// this ensures that the created blocks are not written out
+				network.disconnect(1)
+
+				c1.cutter.CutNext = true
+				for i := 0; i < 10; i++ {
+					err := c1.Order(env, 0)
+					Expect(err).NotTo(HaveOccurred())
+				}
+
+				Eventually(c1.BlockCreator.CreatedBlocks).Should(HaveLen(10))
+			})
+
+			It("calls BlockCreator.commitBlock on all the nodes' chains once a block is written", func() {
+				normalBlock := &common.Block{
+					Header:   &common.BlockHeader{},
+					Data:     &common.BlockData{Data: [][]byte{[]byte("foo")}},
+					Metadata: &common.BlockMetadata{Metadata: make([][]byte, 4)},
+				}
+				// to test that commitBlock is called on c2(follower) as well; this block should be discarded
+				// after the calling of commitBlock since it is a diverging block
+				c2.BlockCreator.CreatedBlocks <- normalBlock
+
+				c1.cutter.CutNext = true
+				err := c1.Order(env, 0)
+				Expect(err).ToNot(HaveOccurred())
+
+				network.exec(
+					func(c *chain) {
+						Eventually(func() int { return c.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(1))
+						b, _ := c.support.WriteBlockArgsForCall(0)
+						Eventually(c.BlockCreator.CreatedBlocks, LongEventualTimeout).Should(HaveLen(0)) // implies that BlockCreator.commitBlock was called
+						// check that it updates the LastCreatedBlock correctly as well
+						Eventually(bytes.Equal(b.Header.Bytes(), c.BlockCreator.LastCreatedBlock.Header.Bytes()), LongEventualTimeout).Should(BeTrue())
+					})
+			})
+
+			Context("handling config blocks", func() {
+				var configEnv *common.Envelope
+				BeforeEach(func() {
+					values := map[string]*common.ConfigValue{
+						"BatchTimeout": {
+							Version: 1,
+							Value: marshalOrPanic(&orderer.BatchTimeout{
+								Timeout: "3ms",
+							}),
+						},
+					}
+					configEnv = newConfigEnv(channelID,
+						common.HeaderType_CONFIG,
+						newConfigUpdateEnv(channelID, values),
+					)
+				})
+
+				It("holds up block creation on leader once a config block has been created and not written out", func() {
+					// this ensures that the created blocks are not written out
+					network.disconnect(1)
+
+					c1.cutter.CutNext = true
+					// config block
+					err := c1.Order(configEnv, 0)
+					Expect(err).NotTo(HaveOccurred())
+					Eventually(c1.BlockCreator.CreatedBlocks).Should(HaveLen(1))
+
+					// to avoid data races since we are accessing these within a goroutine
+					tempEnv := env
+					tempC1 := c1
+
+					// normal blocks
+					go func() {
+						defer GinkgoRecover()
+						err := tempC1.Order(tempEnv, 0)
+						// since the chain is stopped after the Consistently test below passes
+						Expect(err).To(MatchError("chain is stopped"))
+					}()
+
+					// ensure that only one block is created since the config block is never written out
+					Consistently(c1.BlockCreator.CreatedBlocks).Should(HaveLen(1))
+				})
+
+				It("continues creating blocks on leader after a config block has been successfully written out", func() {
+					c1.cutter.CutNext = true
+					// config block
+					err := c1.Configure(configEnv, 0)
+					Expect(err).NotTo(HaveOccurred())
+					network.exec(
+						func(c *chain) {
+							Eventually(func() int { return c.support.WriteConfigBlockCallCount() }, LongEventualTimeout).Should(Equal(1))
+						})
+
+					// normal block following config block
+					err = c1.Order(env, 0)
+					Expect(err).ToNot(HaveOccurred())
+					network.exec(
+						func(c *chain) {
+							Eventually(func() int { return c.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(1))
+						})
+				})
 			})
 
 			When("Snapshotting is enabled", func() {
@@ -1618,7 +1722,6 @@ var _ = Describe("Chain", func() {
 					Expect(i).To(Equal(uint64(1)))
 
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(normalBlock)
 
 					err = c1.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
@@ -1628,9 +1731,10 @@ var _ = Describe("Chain", func() {
 							Eventually(func() int { return c.support.WriteBlockCallCount() }, LongEventualTimeout).Should(Equal(1))
 						})
 
-					Eventually(c1.opts.MemoryStorage.FirstIndex, LongEventualTimeout).Should(Equal(i))
+					Eventually(c1.opts.MemoryStorage.FirstIndex, LongEventualTimeout).Should(BeNumerically(">", i))
+					i, err = c1.opts.MemoryStorage.FirstIndex()
+					Expect(err).NotTo(HaveOccurred())
 
-					normalBlock.Header.Number++
 					err = c1.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1643,7 +1747,6 @@ var _ = Describe("Chain", func() {
 					i, err = c1.opts.MemoryStorage.FirstIndex()
 					Expect(err).NotTo(HaveOccurred())
 
-					normalBlock.Header.Number++
 					err = c1.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1659,15 +1762,12 @@ var _ = Describe("Chain", func() {
 					network.disconnect(2)
 
 					c1.cutter.CutNext = true
-					c1.support.CreateNextBlockReturns(normalBlock)
 
 					for i := 1; i <= 10; i++ {
 						err := c1.Order(env, 0)
 						Expect(err).NotTo(HaveOccurred())
 						Eventually(c1.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(i))
 						Eventually(c3.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(i))
-
-						normalBlock.Header.Number++
 					}
 
 					Eventually(c2.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(0))
@@ -1790,20 +1890,35 @@ var _ = Describe("Chain", func() {
 					network.elect(2)
 				})
 
-				It("purges blockcutter and stops timer if leadership is lost", func() {
-					// enqueue one transaction into 1's blockcutter
+				It("purges blockcutter, stops timer and discards created blocks if leadership is lost", func() {
+					// create one block on chain 1 to test for reset of the created blocks
+					network.disconnect(1)
+					normalBlock := &common.Block{
+						Header:   &common.BlockHeader{},
+						Data:     &common.BlockData{Data: [][]byte{[]byte("foo")}},
+						Metadata: &common.BlockMetadata{Metadata: make([][]byte, 4)},
+					}
+					c1.BlockCreator.CreatedBlocks <- normalBlock
+					Expect(len(c1.BlockCreator.CreatedBlocks)).To(Equal(1))
+
+					// enqueue one transaction into 1's blockcutter to test for purging of block cutter
+					c1.cutter.CutNext = false
 					err := c1.Order(env, 0)
 					Expect(err).ToNot(HaveOccurred())
 					Eventually(c1.cutter.CurBatch, LongEventualTimeout).Should(HaveLen(1))
 
-					network.disconnect(1)
+					// the created block should not be written since leader should not be able to get votes
+					// the block due to the network disconnectivity.
+					Consistently(c1.support.WriteBlockCallCount).Should(Equal(0))
+
 					network.elect(2)
 					network.rejoin(1, true)
 
 					Eventually(c1.clock.WatcherCount, LongEventualTimeout).Should(Equal(1)) // blockcutter time is stopped
-
-					Expect(c1.clock.WatcherCount()).To(Equal(1)) // blockcutter time is stopped
 					Eventually(c1.cutter.CurBatch, LongEventualTimeout).Should(HaveLen(0))
+					// the created block should be discarded since there is a leadership change
+					Eventually(c1.BlockCreator.CreatedBlocks).Should(HaveLen(0))
+					Consistently(c1.support.WriteBlockCallCount).Should(Equal(0))
 
 					network.disconnect(2)
 					n := network.elect(1) // advances 1's clock by n intervals
@@ -1983,18 +2098,15 @@ func newChain(timeout time.Duration, channel string, dataDir string, id uint64, 
 
 	support := &consensusmocks.FakeConsenterSupport{}
 	support.ChainIDReturns(channel)
-	support.CreateNextBlockReturns(
-		&common.Block{
-			Header:   &common.BlockHeader{},
-			Data:     &common.BlockData{Data: [][]byte{[]byte("foo")}},
-			Metadata: &common.BlockMetadata{Metadata: make([][]byte, 4)},
-		},
-	)
 	support.SharedConfigReturns(&mockconfig.Orderer{BatchTimeoutVal: timeout})
 
 	cutter := mockblockcutter.NewReceiver()
 	close(cutter.Block)
 	support.BlockCutterReturns(cutter)
+
+	// for block creator initialization
+	support.HeightReturns(1)
+	support.BlockReturns(getSeedBlock())
 
 	// upon leader change, lead is reset to 0 before set to actual
 	// new leader, i.e. 1 -> 0 -> 2. Therefore 2 numbers will be
@@ -2226,7 +2338,9 @@ func (n *network) elect(id uint64) (tick int) {
 	// tick so it could take effect.
 	t := 1000 * time.Millisecond
 
+	n.connLock.RLock()
 	c := n.chains[id]
+	n.connLock.RUnlock()
 
 	var elected bool
 	for !elected {
@@ -2255,6 +2369,8 @@ func (n *network) elect(id uint64) (tick int) {
 	}
 
 	// now observe leader change on other nodes
+
+	n.connLock.RLock()
 	for _, c := range n.chains {
 		if c.id == id {
 			continue
@@ -2268,6 +2384,7 @@ func (n *network) elect(id uint64) (tick int) {
 			Eventually(c.observe).Should(Receive(Equal(id)))
 		}
 	}
+	n.connLock.RUnlock()
 
 	n.leader = id
 	return tick
@@ -2323,5 +2440,13 @@ func newConfigUpdateEnv(chainID string, values map[string]*common.ConfigValue) *
 				},
 			}, // WriteSet
 		}),
+	}
+}
+
+func getSeedBlock() *common.Block {
+	return &common.Block{
+		Header:   &common.BlockHeader{},
+		Data:     &common.BlockData{Data: [][]byte{[]byte("foo")}},
+		Metadata: &common.BlockMetadata{Metadata: make([][]byte, 4)},
 	}
 }

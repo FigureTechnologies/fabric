@@ -16,6 +16,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/pvtstatepurgemgmt"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/queryutil"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/validator"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/validator/valimpl"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
@@ -31,15 +32,16 @@ var logger = flogging.MustGetLogger("lockbasedtxmgr")
 // LockBasedTxMgr a simple implementation of interface `txmgmt.TxMgr`.
 // This implementation uses a read-write lock to prevent conflicts between transaction simulation and committing
 type LockBasedTxMgr struct {
-	ledgerid        string
-	db              privacyenabledstate.DB
-	pvtdataPurgeMgr *pvtdataPurgeMgr
-	validator       validator.Validator
-	stateListeners  []ledger.StateListener
-	ccInfoProvider  ledger.DeployedChaincodeInfoProvider
-	commitRWLock    sync.RWMutex
-	oldBlockCommit  sync.Mutex
-	current         *current
+	ledgerid              string
+	db                    privacyenabledstate.DB
+	pvtdataPurgeMgr       *pvtdataPurgeMgr
+	validator             validator.Validator
+	stateListeners        []ledger.StateListener
+	ccInfoProvider        ledger.DeployedChaincodeInfoProvider
+	commitRWLock          sync.RWMutex
+	oldBlockCommit        sync.Mutex
+	current               *current
+	lastCommittedBlockNum uint64
 }
 
 type current struct {
@@ -60,7 +62,12 @@ func (c *current) maxTxNumber() uint64 {
 func NewLockBasedTxMgr(ledgerid string, db privacyenabledstate.DB, stateListeners []ledger.StateListener,
 	btlPolicy pvtdatapolicy.BTLPolicy, bookkeepingProvider bookkeeping.Provider, ccInfoProvider ledger.DeployedChaincodeInfoProvider) (*LockBasedTxMgr, error) {
 	db.Open()
-	txmgr := &LockBasedTxMgr{ledgerid: ledgerid, db: db, stateListeners: stateListeners, ccInfoProvider: ccInfoProvider}
+	txmgr := &LockBasedTxMgr{
+		ledgerid:       ledgerid,
+		db:             db,
+		stateListeners: stateListeners,
+		ccInfoProvider: ccInfoProvider,
+	}
 	pvtstatePurgeMgr, err := pvtstatepurgemgmt.InstantiatePurgeMgr(ledgerid, db, btlPolicy, bookkeepingProvider)
 	if err != nil {
 		return nil, err
@@ -95,22 +102,24 @@ func (txmgr *LockBasedTxMgr) NewTxSimulator(txid string) (ledger.TxSimulator, er
 }
 
 // ValidateAndPrepare implements method in interface `txmgmt.TxMgr`
-func (txmgr *LockBasedTxMgr) ValidateAndPrepare(blockAndPvtdata *ledger.BlockAndPvtData, doMVCCValidation bool) error {
+func (txmgr *LockBasedTxMgr) ValidateAndPrepare(blockAndPvtdata *ledger.BlockAndPvtData, doMVCCValidation bool) (
+	[]*txmgr.TxStatInfo, error,
+) {
 	block := blockAndPvtdata.Block
 	logger.Debugf("Waiting for purge mgr to finish the background job of computing expirying keys for the block")
 	txmgr.pvtdataPurgeMgr.WaitForPrepareToFinish()
 	logger.Debugf("Validating new block with num trans = [%d]", len(block.Data.Data))
-	batch, err := txmgr.validator.ValidateAndPrepareBatch(blockAndPvtdata, doMVCCValidation)
+	batch, txstatsInfo, err := txmgr.validator.ValidateAndPrepareBatch(blockAndPvtdata, doMVCCValidation)
 	if err != nil {
 		txmgr.reset()
-		return err
+		return nil, err
 	}
 	txmgr.current = &current{block: block, batch: batch}
 	if err := txmgr.invokeNamespaceListeners(); err != nil {
 		txmgr.reset()
-		return err
+		return nil, err
 	}
-	return nil
+	return txstatsInfo, nil
 }
 
 // RemoveStaleAndCommitPvtDataOfOldBlocks implements method in interface `txmgmt.TxMgr`
@@ -138,7 +147,7 @@ func (txmgr *LockBasedTxMgr) RemoveStaleAndCommitPvtDataOfOldBlocks(blocksPvtDat
 	// a given <ns, coll, key>, we need to find duplicate tuples with different
 	// versions and use the one with the higher version
 	uniquePvtData, err := constructUniquePvtData(blocksPvtData)
-	if err != nil {
+	if len(uniquePvtData) == 0 || err != nil {
 		return err
 	}
 
@@ -164,12 +173,13 @@ func (txmgr *LockBasedTxMgr) RemoveStaleAndCommitPvtDataOfOldBlocks(blocksPvtDat
 	// PrepareExpiringKeys from Commit but we rerun this here because,
 	// RemoveStaleAndCommitPvtDataOfOldBlocks may have added new data which might be
 	// eligible for expiry during the next regular block commit.
-	txmgr.pvtdataPurgeMgr.UpdateBookkeepingForPvtDataOfOldBlocks(batch.PvtUpdates)
-	nextBlockNumToBeCommitted, err := txmgr.getNextBlockNumberToBeCommitted()
-	if err != nil {
+	if err := txmgr.pvtdataPurgeMgr.UpdateBookkeepingForPvtDataOfOldBlocks(batch.PvtUpdates); err != nil {
 		return err
 	}
-	txmgr.pvtdataPurgeMgr.PrepareForExpiringKeys(nextBlockNumToBeCommitted)
+
+	if txmgr.lastCommittedBlockNum > 0 {
+		txmgr.pvtdataPurgeMgr.PrepareForExpiringKeys(txmgr.lastCommittedBlockNum + 1)
+	}
 
 	// (6) commit the pvt data to the stateDB
 	if err := txmgr.db.ApplyPrivacyAwareUpdates(batch, nil); err != nil {
@@ -351,16 +361,6 @@ func checkIfPvtWriteIsStale(hashedKey *privacyenabledstate.HashedCompositeKey,
 	return true, nil
 }
 
-// getNextBlockNumberToBeCommittedreturn the last committed block number + 1
-func (txmgr *LockBasedTxMgr) getNextBlockNumberToBeCommitted() (uint64, error) {
-	lastCommittedBlk, err := txmgr.db.GetLatestSavePoint()
-	if err != nil {
-		return 0, err
-	}
-
-	return lastCommittedBlk.BlockNum + 1, nil
-}
-
 func (uniquePvtData uniquePvtDataMap) transformToUpdateBatch() *privacyenabledstate.UpdateBatch {
 	batch := privacyenabledstate.NewUpdateBatch()
 	for hashedCompositeKey, pvtWrite := range uniquePvtData {
@@ -472,6 +472,7 @@ func (txmgr *LockBasedTxMgr) Commit() error {
 	// In the case of error state listeners will not recieve this call - instead a peer panic is caused by the ledger upon receiveing
 	// an error from this function
 	txmgr.updateStateListeners()
+	txmgr.lastCommittedBlockNum = txmgr.current.blockNum()
 	return nil
 }
 
@@ -503,7 +504,7 @@ func (txmgr *LockBasedTxMgr) ShouldRecover(lastAvailableBlock uint64) (bool, uin
 func (txmgr *LockBasedTxMgr) CommitLostBlock(blockAndPvtdata *ledger.BlockAndPvtData) error {
 	block := blockAndPvtdata.Block
 	logger.Debugf("Constructing updateSet for the block %d", block.Header.Number)
-	if err := txmgr.ValidateAndPrepare(blockAndPvtdata, false); err != nil {
+	if _, err := txmgr.ValidateAndPrepare(blockAndPvtdata, false); err != nil {
 		return err
 	}
 
