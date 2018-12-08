@@ -56,15 +56,15 @@
   revision = "cd527374f1e5bff4938207604a14f2e38a9cf512"
 
 [[projects]]
-  digest = "1:328f1cc93e91a3fb11d501fd4f3167f5a3903f50caf55edd6ed4e44a70ffaee1"
+  digest = "1:e22217b1fd7a20d7cc1ec7e49b83e63be449ad95bdc7a8dfca3d996a9014bba3"
   name = "github.com/Shopify/sarama"
   packages = [
     ".",
     "mocks",
   ]
   pruneopts = "NUT"
-  revision = "35324cf48e33d8260e1c7c18854465a904ade249"
-  version = "v1.17.0"
+  revision = "ec843464b50d4c8b56403ec9d589cf41ea30e722"
+  version = "v1.19.0"
 
 [[projects]]
   branch = "master"
@@ -717,7 +717,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:54c5cf40673a32664cda38495c4aad9fca860c53b75dfe0e94d029751920ccec"
+  digest = "1:f2ffd421680b0a3f7887501b3c6974bcf19217ecd301d0e2c9b681940ec363d5"
   name = "github.com/syndtr/goleveldb"
   packages = [
     "leveldb",
@@ -734,7 +734,7 @@
     "leveldb/util",
   ]
   pruneopts = "NUT"
-  revision = "169b1b37be738edb2813dab48c97a549bcf99bb5"
+  revision = "ae2bd5eed72d46b28834ec3f60db3a3ebedd8dbd"
 
 [[projects]]
   branch = "master"
