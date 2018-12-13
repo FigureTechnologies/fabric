@@ -10,6 +10,7 @@ package kubernetescontroller
 import (
 	"context"
 	"fmt"
+	"github.com/hyperledger/fabric/core/chaincode"
 	"io/ioutil"
 	"os"
 	"reflect"
@@ -121,6 +122,9 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	// Clean up any existing deployments (why do this?)
 	api.stopAllInternal(ccid)
 
+	// Inject the peer and version information.
+	env = append(env, chaincode.E2eeConfigs(api.PeerID + "." + api.Namespace, ccid.Name, ccid.Version)...)
+
 	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
 		kubernetesLogger.Errorf("start - cannot create chaincode deploy %s", err)
@@ -144,7 +148,6 @@ func (vm *KubernetesAPI) HealthCheck(ctx context.Context) error {
 }
 
 func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []string, env []string, filesToUpload map[string][]byte) (*apiv1.Pod, error) {
-
 	podName := api.GetPodName(ccid)
 	kubernetesLogger.Info("Starting chaincode", podName)
 
@@ -332,11 +335,14 @@ func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, erro
 
 // GetPodName composes a name for a chaincode pod based on available metadata
 func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
+	// assetledger-develop-61
 	name := ccid.GetName()
 
 	if api.PeerID != "" {
+		// cc-peer-0-assetledger-develop-61
 		name = fmt.Sprintf("cc-%s-%s", api.PeerID, name)
 	} else {
+		// cc-assetledger-develop-61
 		name = fmt.Sprintf("cc-%s", name)
 	}
 	// replace any invalid characters with "-"
