@@ -45,7 +45,7 @@ type ContainerRuntime struct {
 
 func E2eeConfigs(peerAddr, ccName, ccVer string) []string {
 	return []string{
-		fmt.Sprintf("CORE_CHAINCODE_INFO_PEER_ADDR=%s", peerAddr),
+		fmt.Sprintf("CORE_CHAINCODE_INFO_PEER_ADDRESS=%s", peerAddr),
 		fmt.Sprintf("CORE_CHAINCODE_INFO_NAME=%s", ccName),
 		fmt.Sprintf("CORE_CHAINCODE_INFO_VERSION=%s", ccVer),
 	}
