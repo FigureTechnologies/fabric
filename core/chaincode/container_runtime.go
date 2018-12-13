@@ -43,6 +43,14 @@ type ContainerRuntime struct {
 	PlatformRegistry *platforms.Registry
 }
 
+func E2eeConfigs(peerAddr, ccName, ccVer string) []string {
+	return []string{
+		fmt.Sprintf("CORE_CHAINCODE_INFO_PEER_ADDR=%s", peerAddr),
+		fmt.Sprintf("CORE_CHAINCODE_INFO_NAME=%s", ccName),
+		fmt.Sprintf("CORE_CHAINCODE_INFO_VERSION=%s", ccVer),
+	}
+}
+
 // Start launches chaincode in a runtime environment.
 func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePackage []byte) error {
 	cname := ccci.Name + ":" + ccci.Version
@@ -53,10 +61,7 @@ func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePa
 	}
 
 	// Inject the peer and version information.
-	// TODO put these into LaunchConfig at some point.
-	lc.Envs = append(lc.Envs, fmt.Sprintf("CORE_CHAINCODE_INFO_PEER_ADDR=%s", c.PeerAddress))
-	lc.Envs = append(lc.Envs, fmt.Sprintf("CORE_CHAINCODE_INFO_NAME=%s", ccci.Name))
-	lc.Envs = append(lc.Envs, fmt.Sprintf("CORE_CHAINCODE_INFO_VERSION=%s", ccci.Version))
+	lc.Envs = append(lc.Envs, E2eeConfigs(c.PeerAddress, ccci.Name, ccci.Version)...)
 
 	chaincodeLogger.Debugf("start container: %s", cname)
 	chaincodeLogger.Debugf("start container with args: %s", strings.Join(lc.Args, " "))
