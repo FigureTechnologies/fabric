@@ -77,7 +77,7 @@ func testMain(m *testing.M) int {
 	viper.Set("ledger.state.couchDBConfig.username", "")
 	viper.Set("ledger.state.couchDBConfig.password", "")
 	viper.Set("ledger.state.couchDBConfig.maxRetries", 3)
-	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 10)
+	viper.Set("ledger.state.couchDBConfig.maxRetriesOnStartup", 20)
 	viper.Set("ledger.state.couchDBConfig.requestTimeout", time.Second*35)
 	viper.Set("ledger.state.couchDBConfig.createGlobalChangesDB", true)
 
@@ -1264,6 +1264,12 @@ func TestRichQuery(t *testing.T) {
 	//There should be 4 results
 	assert.Equal(t, 4, len(queryResult))
 
+	//Attachments retrieved should be correct
+	assert.Equal(t, attachment2.AttachmentBytes, queryResult[0].Attachments[0].AttachmentBytes)
+	assert.Equal(t, attachment3.AttachmentBytes, queryResult[1].Attachments[0].AttachmentBytes)
+	assert.Equal(t, attachment4.AttachmentBytes, queryResult[2].Attachments[0].AttachmentBytes)
+	assert.Equal(t, attachment5.AttachmentBytes, queryResult[3].Attachments[0].AttachmentBytes)
+
 	//Test query with for tom  -------------------------------------------------------------------
 	queryString = `{"selector":{"owner":{"$eq":"tom"}}}`
 
@@ -1282,12 +1288,6 @@ func TestRichQuery(t *testing.T) {
 	//There should be 2 results for owner="tom" with a limit of 2
 	assert.Equal(t, 2, len(queryResult))
 
-	//Test query with invalid index  -------------------------------------------------------------------
-	queryString = `{"selector":{"owner":"tom"}, "use_index":["indexOwnerDoc","indexOwner"]}`
-
-	_, _, err = db.QueryDocuments(queryString)
-	assert.Error(t, err, "Error should have been thrown for an invalid index")
-
 	//Create an index definition
 	indexDefSize := `{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortDoc", "name":"indexSizeSortName","type":"json"}`
 
@@ -1303,22 +1303,6 @@ func TestRichQuery(t *testing.T) {
 
 	_, _, err = db.QueryDocuments(queryString)
 	assert.NoError(t, err, "Error when attempting to execute a query with a valid index")
-
-	//Test query with wrong fields for a valid index  -------------------------------------------------------------------
-	queryString = `{"selector":{"owner":{"$eq":"tom"}}, "use_index":"indexSizeSortName"}`
-
-	// no design doc specified, this should return a 400 error, indicating index not found
-	_, _, err = db.QueryDocuments(queryString)
-	assert.Error(t, err, "400 error should have been thrown for a missing index")
-	assert.Equal(t, true, strings.Contains(err.Error(), "Status Code:400"))
-
-	//Test query with wrong fields for a valid index  -------------------------------------------------------------------
-	queryString = `{"selector":{"owner":{"$eq":"tom"}}, "use_index":["indexSizeSortDoc","indexSizeSortName"]}`
-
-	// design doc specified, this should return a 500 error, indicating a bad match
-	_, _, err = db.QueryDocuments(queryString)
-	assert.Error(t, err, "500 error should have been thrown for a missing index with design doc specified")
-	assert.Equal(t, true, strings.Contains(err.Error(), "Status Code:500"))
 
 }
 
