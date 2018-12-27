@@ -103,7 +103,7 @@ type bccspmsp struct {
 // generate identities and signing identities backed by
 // certificates and keypairs
 func newBccspMsp(version MSPVersion) (MSP, error) {
-	mspLogger.Debugf("Creating BCCSP-based MSP instance")
+	mspLogger.Debugf("Creating BCCSP-based MSP instance version ", version)
 
 	bccsp := factory.GetDefault()
 	theMsp := &bccspmsp{}

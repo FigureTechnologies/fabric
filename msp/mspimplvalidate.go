@@ -199,10 +199,8 @@ func (msp *bccspmsp) validateIdentityOUsV11(id *identity) error {
 			break
 		}
 	}
-	if counter != 1 {
+	if counter > 1 {
 		return errors.Errorf("the identity must be a client, a peer or an orderer identity to be valid, not a combination of them. OUs: [%v], MSP: [%s]", id.GetOrganizationalUnits(), msp.name)
-	} else if counter == 0 {
-		return errors.Errorf("the identity is incompatible with the specified nodeOU configuration for MSP [%s]", msp.name)
 	}
 	return nil
 }
