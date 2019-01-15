@@ -435,6 +435,11 @@ docker-tag-latest: $(IMAGES:%=%-docker-tag-latest)
 	$(eval TARGET = ${patsubst %-docker-tag-latest,%,${@}})
 	docker tag $(DOCKER_NS)/fabric-$(TARGET):$(DOCKER_TAG) $(DOCKER_NS)/fabric-$(TARGET):latest
 	docker tag $(DOCKER_NS)/fabric-$(TARGET):$(DOCKER_TAG) us.gcr.io/figure-development/fabric-$(TARGET):latest
+
+docker-push-latest: $(IMAGES:%=%-docker-push-latest)
+
+%-docker-push-latest:
+	$(eval TARGET = ${patsubst %-docker-push-latest,%,${@}})
 	docker push us.gcr.io/figure-development/fabric-$(TARGET):latest
 
 docker-tag-stable: $(IMAGES:%=%-docker-tag-stable)
