@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/hyperledger/fabric/core/chaincode"
 	"io/ioutil"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"reflect"
 	"regexp"
@@ -167,6 +168,14 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 
 	weight := int32(50)
 	labelExp, err := metav1.ParseToLabelSelector(fmt.Sprintf("Name == %s", api.PeerID))
+
+
+	// Read in resource limits and requests from config.
+  	resourceRequest, err := getResourceRequest()
+ 	if err != nil {
+		return nil, err
+	}
+
 	pod := &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: podName,
@@ -192,6 +201,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 							MountPath: mountPoint,
 						},
 					},
+					Resources: resourceRequest,
 				},
 			},
 			Affinity: &apiv1.Affinity{
@@ -225,6 +235,73 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 	kubernetesLogger.Info("Creating chaincode peer pod deployment")
 	return api.client.Core().Pods(api.Namespace).Create(pod)
 }
+
+func getResourceQuantity(key string) (*resource.Quantity, error) {
+	q := viper.GetString(key)
+	if q == "" {
+		// Not specified in config.
+		return nil, nil
+	}
+
+	v, err := resource.ParseQuantity(q)
+	if err != nil {
+		return nil, err
+	}
+
+	return &v, nil
+}
+
+func getResourceRequest() (apiv1.ResourceRequirements, error) {
+	resourceRequest := apiv1.ResourceRequirements{
+		Limits: apiv1.ResourceList{},
+		Requests: apiv1.ResourceList{},
+	}
+
+	keyPrefix := "vm.kubernetes.container.%s"
+	key := func(k string) string {
+		return fmt.Sprintf(keyPrefix, k)
+	}
+
+	setQuantityFromConfig := func(k apiv1.ResourceName) error {
+		// Read in (possibly non-existent) value from config.
+		qty, err := getResourceQuantity(key(k.String()))
+		if err != nil {
+			return err
+		}
+
+		// No quantity provided is not an error, just do nothing.
+		if qty == nil {
+			return nil
+		}
+
+		// If quantity is provided, add to resources request.
+		resourceRequest.Requests[k] = *qty
+		return nil
+	}
+
+	// vm.kubernetes.container.limits.cpu
+	if err := setQuantityFromConfig(apiv1.ResourceLimitsCPU); err != nil {
+		return apiv1.ResourceRequirements{}, err
+	}
+
+	// vm.kubernetes.container.limits.memory
+	if err := setQuantityFromConfig(apiv1.ResourceLimitsMemory); err != nil {
+		return apiv1.ResourceRequirements{}, err
+	}
+
+	// vm.kubernetes.container.requests.cpu
+	if err := setQuantityFromConfig(apiv1.ResourceRequestsCPU); err != nil {
+		return apiv1.ResourceRequirements{}, err
+	}
+
+	// vm.kubernetes.container.requests.memory
+	if err := setQuantityFromConfig(apiv1.ResourceRequestsMemory); err != nil {
+		return apiv1.ResourceRequirements{}, err
+	}
+
+	return resourceRequest, nil
+}
+
 
 // createChainCodeFilesConfigMap return the mount point to use with the create config map or an error if it could not be created.
 func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToUpload map[string][]byte) (string, *apiv1.ConfigMap, error) {
