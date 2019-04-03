@@ -10,13 +10,14 @@ package kubernetescontroller
 import (
 	"context"
 	"fmt"
-	"github.com/hyperledger/fabric/core/chaincode"
 	"io/ioutil"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/hyperledger/fabric/core/chaincode"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/spf13/viper"
 
@@ -124,7 +125,9 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	api.stopAllInternal(ccid)
 
 	// Inject the peer and version information.
-	env = append(env, chaincode.E2eeConfigs(api.PeerID + "." + api.Namespace, ccid.Name, ccid.Version)...)
+	//env = append(env, chaincode.E2eeConfigs(api.PeerID + "." + api.Namespace, ccid.Name, ccid.Version)...)
+	// HACK :: This lets is build without the version string we need which was removed.
+	env = append(env, chaincode.E2eeConfigs(api.PeerID+"."+api.Namespace, ccid.String(), ccid.String())...)
 
 	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
@@ -140,6 +143,12 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
 	// Remove any existing deployments by matching labels
 	return api.stopAllInternal(ccid)
+}
+
+// Wait blocks until the container stops and returns the exit code of the container.
+func (vm *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
+	// Decide what kind of check we want to do here... nothing for now.
+	return 0, nil
 }
 
 // HealthCheck checks api call used by docker for ensuring endpoint is available...
@@ -169,10 +178,9 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 	weight := int32(50)
 	labelExp, err := metav1.ParseToLabelSelector(fmt.Sprintf("Name == %s", api.PeerID))
 
-
 	// Read in resource limits and requests from config.
-  	resourceRequest, err := getResourceRequest()
- 	if err != nil {
+	resourceRequest, err := getResourceRequest()
+	if err != nil {
 		return nil, err
 	}
 
@@ -182,9 +190,12 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			Labels: map[string]string{
 				"service":    "peer-chaincode",
 				"peer-owner": api.PeerID,
-				"ccname":     ccid.Name,
-				"ccver":      ccid.Version,
-				"cc":         podName,
+				// "ccname":     ccid.Name,
+				// "ccver":      ccid.Version,
+				// HACK :: This lets is build without the version string we need which was removed.
+				"ccname": ccid.String(),
+				"ccver":  ccid.String(),
+				"cc":     podName,
 			},
 		},
 		Spec: apiv1.PodSpec{
@@ -253,7 +264,7 @@ func getResourceQuantity(key string) (*resource.Quantity, error) {
 
 func getResourceRequest() (apiv1.ResourceRequirements, error) {
 	resourceRequest := apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{},
+		Limits:   apiv1.ResourceList{},
 		Requests: apiv1.ResourceList{},
 	}
 
@@ -301,7 +312,6 @@ func getResourceRequest() (apiv1.ResourceRequirements, error) {
 
 	return resourceRequest, nil
 }
-
 
 // createChainCodeFilesConfigMap return the mount point to use with the create config map or an error if it could not be created.
 func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToUpload map[string][]byte) (string, *apiv1.ConfigMap, error) {
@@ -401,7 +411,9 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 // FindPeerCCPods looks for pods associated with this peer assigned to the given chaincode
 func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, error) {
 
-	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
+	//labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
+	// HACK :: This lets is build without the version string we need which was removed.
+	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid, ccid)
 
 	listOptions := metav1.ListOptions{
 		LabelSelector: labelExp,
@@ -413,7 +425,7 @@ func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, erro
 // GetPodName composes a name for a chaincode pod based on available metadata
 func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
 	// assetledger-develop-61
-	name := ccid.GetName()
+	name := ccid.String() //  HACK :: This method was removed .... .GetName()
 
 	if api.PeerID != "" {
 		// cc-peer-0-assetledger-develop-61
@@ -430,5 +442,7 @@ func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
 func (api *KubernetesAPI) GetChainCodeImageName(ccid ccintf.CCID) string {
 	ns := viper.GetString("chaincode.registry.namespace")
 	prefix := viper.GetString("chaincode.registry.prefix")
-	return fmt.Sprintf("%s/%s-%s:%s", ns, prefix, ccid.Name, ccid.Version)
+	//return fmt.Sprintf("%s/%s-%s:%s", ns, prefix, ccid.Name, ccid.Version)
+	// HACK :: This lets is build without the version string we need which was removed.
+	return fmt.Sprintf("%s/%s-%s", ns, prefix, ccid)
 }
