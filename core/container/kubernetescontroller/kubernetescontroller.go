@@ -10,13 +10,14 @@ package kubernetescontroller
 import (
 	"context"
 	"fmt"
-	"github.com/hyperledger/fabric/core/chaincode"
 	"io/ioutil"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/hyperledger/fabric/core/chaincode"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/spf13/viper"
 
@@ -124,7 +125,7 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	api.stopAllInternal(ccid)
 
 	// Inject the peer and version information.
-	env = append(env, chaincode.E2eeConfigs(api.PeerID + "." + api.Namespace, ccid.Name, ccid.Version)...)
+	env = append(env, chaincode.E2eeConfigs(api.PeerID+"."+api.Namespace, ccid.Name, ccid.Version)...)
 
 	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
@@ -140,6 +141,12 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
 	// Remove any existing deployments by matching labels
 	return api.stopAllInternal(ccid)
+}
+
+// Wait blocks until the container stops and returns the exit code of the container.
+func (vm *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
+	// We do not support this at this time.
+	return 0, nil
 }
 
 // HealthCheck checks api call used by docker for ensuring endpoint is available...
@@ -169,10 +176,9 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 	weight := int32(50)
 	labelExp, err := metav1.ParseToLabelSelector(fmt.Sprintf("Name == %s", api.PeerID))
 
-
 	// Read in resource limits and requests from config.
-  	resourceRequest, err := getResourceRequest()
- 	if err != nil {
+	resourceRequest, err := getResourceRequest()
+	if err != nil {
 		return nil, err
 	}
 
@@ -253,7 +259,7 @@ func getResourceQuantity(key string) (*resource.Quantity, error) {
 
 func getResourceRequest() (apiv1.ResourceRequirements, error) {
 	resourceRequest := apiv1.ResourceRequirements{
-		Limits: apiv1.ResourceList{},
+		Limits:   apiv1.ResourceList{},
 		Requests: apiv1.ResourceList{},
 	}
 
@@ -301,7 +307,6 @@ func getResourceRequest() (apiv1.ResourceRequirements, error) {
 
 	return resourceRequest, nil
 }
-
 
 // createChainCodeFilesConfigMap return the mount point to use with the create config map or an error if it could not be created.
 func (api *KubernetesAPI) createChainCodeFilesConfigMap(podName string, filesToUpload map[string][]byte) (string, *apiv1.ConfigMap, error) {
