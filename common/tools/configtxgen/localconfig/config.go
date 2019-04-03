@@ -155,16 +155,16 @@ type AnchorPeer struct {
 // Orderer contains configuration which is used for the
 // bootstrapping of an orderer by the provisional bootstrapper.
 type Orderer struct {
-	OrdererType   string             `yaml:"OrdererType"`
-	Addresses     []string           `yaml:"Addresses"`
-	BatchTimeout  time.Duration      `yaml:"BatchTimeout"`
-	BatchSize     BatchSize          `yaml:"BatchSize"`
-	Kafka         Kafka              `yaml:"Kafka"`
-	EtcdRaft      *etcdraft.Metadata `yaml:"EtcdRaft"`
-	Organizations []*Organization    `yaml:"Organizations"`
-	MaxChannels   uint64             `yaml:"MaxChannels"`
-	Capabilities  map[string]bool    `yaml:"Capabilities"`
-	Policies      map[string]*Policy `yaml:"Policies"`
+	OrdererType   string                   `yaml:"OrdererType"`
+	Addresses     []string                 `yaml:"Addresses"`
+	BatchTimeout  time.Duration            `yaml:"BatchTimeout"`
+	BatchSize     BatchSize                `yaml:"BatchSize"`
+	Kafka         Kafka                    `yaml:"Kafka"`
+	EtcdRaft      *etcdraft.ConfigMetadata `yaml:"EtcdRaft"`
+	Organizations []*Organization          `yaml:"Organizations"`
+	MaxChannels   uint64                   `yaml:"MaxChannels"`
+	Capabilities  map[string]bool          `yaml:"Capabilities"`
+	Policies      map[string]*Policy       `yaml:"Policies"`
 }
 
 // BatchSize contains configuration affecting the size of batches.
@@ -185,20 +185,20 @@ var genesisDefaults = TopLevel{
 		Addresses:    []string{"127.0.0.1:7050"},
 		BatchTimeout: 2 * time.Second,
 		BatchSize: BatchSize{
-			MaxMessageCount:   10,
+			MaxMessageCount:   500,
 			AbsoluteMaxBytes:  10 * 1024 * 1024,
-			PreferredMaxBytes: 512 * 1024,
+			PreferredMaxBytes: 2 * 1024 * 1024,
 		},
 		Kafka: Kafka{
 			Brokers: []string{"127.0.0.1:9092"},
 		},
-		EtcdRaft: &etcdraft.Metadata{
+		EtcdRaft: &etcdraft.ConfigMetadata{
 			Options: &etcdraft.Options{
-				TickInterval:    100,
-				ElectionTick:    10,
-				HeartbeatTick:   1,
-				MaxInflightMsgs: 256,
-				MaxSizePerMsg:   1048576,
+				TickInterval:         "500ms",
+				ElectionTick:         10,
+				HeartbeatTick:        1,
+				MaxInflightBlocks:    5,
+				SnapshotIntervalSize: 20 * 1024 * 1024, // 20 MB
 			},
 		},
 	},
@@ -403,7 +403,7 @@ loop:
 	second_loop:
 		for {
 			switch {
-			case ord.EtcdRaft.Options.TickInterval == 0:
+			case ord.EtcdRaft.Options.TickInterval == "":
 				logger.Infof("Orderer.EtcdRaft.Options.TickInterval unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.TickInterval)
 				ord.EtcdRaft.Options.TickInterval = genesisDefaults.Orderer.EtcdRaft.Options.TickInterval
 
@@ -415,13 +415,13 @@ loop:
 				logger.Infof("Orderer.EtcdRaft.Options.HeartbeatTick unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.HeartbeatTick)
 				ord.EtcdRaft.Options.HeartbeatTick = genesisDefaults.Orderer.EtcdRaft.Options.HeartbeatTick
 
-			case ord.EtcdRaft.Options.MaxInflightMsgs == 0:
-				logger.Infof("Orderer.EtcdRaft.Options.MaxInflightMsgs unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.MaxInflightMsgs)
-				ord.EtcdRaft.Options.MaxInflightMsgs = genesisDefaults.Orderer.EtcdRaft.Options.MaxInflightMsgs
+			case ord.EtcdRaft.Options.MaxInflightBlocks == 0:
+				logger.Infof("Orderer.EtcdRaft.Options.MaxInflightBlocks unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.MaxInflightBlocks)
+				ord.EtcdRaft.Options.MaxInflightBlocks = genesisDefaults.Orderer.EtcdRaft.Options.MaxInflightBlocks
 
-			case ord.EtcdRaft.Options.MaxSizePerMsg == 0:
-				logger.Infof("Orderer.EtcdRaft.Options.MaxSizePerMsg unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.MaxSizePerMsg)
-				ord.EtcdRaft.Options.MaxSizePerMsg = genesisDefaults.Orderer.EtcdRaft.Options.MaxSizePerMsg
+			case ord.EtcdRaft.Options.SnapshotIntervalSize == 0:
+				logger.Infof("Orderer.EtcdRaft.Options.SnapshotIntervalSize unset, setting to %v", genesisDefaults.Orderer.EtcdRaft.Options.SnapshotIntervalSize)
+				ord.EtcdRaft.Options.SnapshotIntervalSize = genesisDefaults.Orderer.EtcdRaft.Options.SnapshotIntervalSize
 
 			case len(ord.EtcdRaft.Consenters) == 0:
 				logger.Panicf("%s configuration did not specify any consenter", etcdraft.TypeKey)
@@ -429,6 +429,10 @@ loop:
 			default:
 				break second_loop
 			}
+		}
+
+		if _, err := time.ParseDuration(ord.EtcdRaft.Options.TickInterval); err != nil {
+			logger.Panicf("Etcdraft TickInterval (%s) must be in time duration format", ord.EtcdRaft.Options.TickInterval)
 		}
 
 		// validate the specified members for Options

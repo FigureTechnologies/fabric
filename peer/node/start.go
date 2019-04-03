@@ -239,12 +239,16 @@ func serve(args []string) error {
 		logger.Info("Starting peer with TLS enabled")
 		// set up credential support
 		cs := comm.GetCredentialSupport()
-		cs.ServerRootCAs = serverConfig.SecOpts.ServerRootCAs
+		roots, err := peer.GetServerRootCAs()
+		if err != nil {
+			logger.Fatalf("Failed to set TLS server root CAs: %s", err)
+		}
+		cs.ServerRootCAs = roots
 
 		// set the cert to use if client auth is requested by remote endpoints
 		clientCert, err := peer.GetClientCertificate()
 		if err != nil {
-			logger.Fatalf("Failed to set TLS client certificate (%s)", err)
+			logger.Fatalf("Failed to set TLS client certificate: %s", err)
 		}
 		comm.GetCredentialSupport().SetClientCertificate(clientCert)
 	}
@@ -312,7 +316,7 @@ func serve(args []string) error {
 	policyMgr := peer.NewChannelPolicyManagerGetter()
 
 	// Initialize gossip component
-	err = initGossipService(policyMgr, peerServer, serializedIdentity, peerEndpoint.Address)
+	err = initGossipService(policyMgr, metricsProvider, peerServer, serializedIdentity, peerEndpoint.Address)
 	if err != nil {
 		return err
 	}
@@ -845,7 +849,8 @@ func secureDialOpts() []grpc.DialOption {
 // 2. Init the message crypto service;
 // 3. Init the security advisor;
 // 4. Init gossip related struct.
-func initGossipService(policyMgr policies.ChannelPolicyManagerGetter, peerServer *comm.GRPCServer, serializedIdentity []byte, peerAddr string) error {
+func initGossipService(policyMgr policies.ChannelPolicyManagerGetter, metricsProvider metrics.Provider,
+	peerServer *comm.GRPCServer, serializedIdentity []byte, peerAddr string) error {
 	var certs *gossipcommon.TLSCertificates
 	if peerServer.TLSEnabled() {
 		serverCert := peerServer.ServerCertificate()
@@ -868,6 +873,7 @@ func initGossipService(policyMgr policies.ChannelPolicyManagerGetter, peerServer
 
 	return service.InitGossipService(
 		serializedIdentity,
+		metricsProvider,
 		peerAddr,
 		peerServer.Server(),
 		certs,

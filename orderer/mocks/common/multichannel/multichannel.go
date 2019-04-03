@@ -66,6 +66,8 @@ type ConsenterSupport struct {
 
 	// BlockVerificationErr is returned by VerifyBlockSignature
 	BlockVerificationErr error
+
+	SystemChannelVal bool
 }
 
 // Block returns the block with the given number or nil if not found
@@ -100,8 +102,7 @@ func (mcs *ConsenterSupport) WriteBlock(block *cb.Block, encodedMetadataValue []
 	if encodedMetadataValue != nil {
 		block.Metadata.Metadata[cb.BlockMetadataIndex_ORDERER] = utils.MarshalOrPanic(&cb.Metadata{Value: encodedMetadataValue})
 	}
-	mcs.HeightVal++
-	mcs.Blocks <- block
+	mcs.Append(block)
 }
 
 // WriteConfigBlock calls WriteBlock
@@ -157,4 +158,17 @@ func (mcs *ConsenterSupport) Sequence() uint64 {
 // VerifyBlockSignature verifies a signature of a block
 func (mcs *ConsenterSupport) VerifyBlockSignature(_ []*cb.SignedData, _ *cb.ConfigEnvelope) error {
 	return mcs.BlockVerificationErr
+}
+
+// IsSystemChannel returns true if this is the system channel
+func (mcs *ConsenterSupport) IsSystemChannel() bool {
+	return mcs.SystemChannelVal
+}
+
+// Append appends a new block to the ledger in its raw form,
+// unlike WriteBlock that also mutates its metadata.
+func (mcs *ConsenterSupport) Append(block *cb.Block) error {
+	mcs.HeightVal++
+	mcs.Blocks <- block
+	return nil
 }

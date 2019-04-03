@@ -15,14 +15,17 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-lib-go/healthz"
+	"github.com/hyperledger/fabric/common/tools/configtxgen/encoder"
+	"github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
@@ -35,6 +38,7 @@ import (
 	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/gexec"
 	"github.com/tedsuo/ifrit"
+	"github.com/tedsuo/ifrit/ginkgomon"
 )
 
 var _ = Describe("EndToEnd", func() {
@@ -84,6 +88,17 @@ var _ = Describe("EndToEnd", func() {
 			network = nwo.New(nwo.BasicSolo(), testDir, client, BasePort(), components)
 			network.MetricsProvider = "statsd"
 			network.StatsdEndpoint = datagramReader.Address()
+			network.Profiles = append(network.Profiles, &nwo.Profile{
+				Name:          "TwoOrgsBaseProfileChannel",
+				Consortium:    "SampleConsortium",
+				Orderers:      []string{"orderer"},
+				Organizations: []string{"Org1", "Org2"},
+			})
+			network.Channels = append(network.Channels, &nwo.Channel{
+				Name:        "baseprofilechannel",
+				Profile:     "TwoOrgsBaseProfileChannel",
+				BaseProfile: "TwoOrgsOrdererGenesis",
+			})
 
 			network.GenerateConfigTree()
 			network.Bootstrap()
@@ -123,6 +138,10 @@ var _ = Describe("EndToEnd", func() {
 			CheckPeerStatsdMetrics(datagramReader.String(), "org1_peer0")
 			CheckPeerStatsdMetrics(datagramReader.String(), "org2_peer1")
 			CheckOrdererStatsdMetrics(datagramReader.String(), "ordererorg_orderer")
+
+			By("setting up a channel from a base profile")
+			additionalPeer := network.Peer("Org2", "peer1")
+			network.CreateChannel("baseprofilechannel", orderer, peer, additionalPeer)
 		})
 	})
 
@@ -151,7 +170,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	PDescribe("basic single node etcdraft network with 2 orgs", func() {
+	Describe("basic single node etcdraft network with 2 orgs", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -172,7 +191,7 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	PDescribe("three node etcdraft network with 2 orgs", func() {
+	Describe("three node etcdraft network with 2 orgs", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.MultiNodeEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -250,7 +269,96 @@ var _ = Describe("EndToEnd", func() {
 		})
 	})
 
-	PDescribe("etcd raft, checking valid configuration update of type B", func() {
+	Describe("Invalid Raft config metadata", func() {
+		It("refuses to start orderer or rejects config update", func() {
+			By("Creating malformed genesis block")
+			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
+			network.GenerateConfigTree()
+			network.Bootstrap()
+
+			sysProfile := localconfig.Load(network.SystemChannel.Profile, network.RootDir)
+			Expect(sysProfile.Orderer).NotTo(BeNil())
+			sysProfile.Orderer.EtcdRaft.Options.ElectionTick = sysProfile.Orderer.EtcdRaft.Options.HeartbeatTick
+			pgen := encoder.New(sysProfile)
+			genesisBlock := pgen.GenesisBlockForChannel(network.SystemChannel.Name)
+			data, err := proto.Marshal(genesisBlock)
+			Expect(err).NotTo(HaveOccurred())
+			ioutil.WriteFile(network.OutputBlockPath(network.SystemChannel.Name), data, 0644)
+
+			By("Starting orderer with malformed genesis block")
+			ordererRunner := network.OrdererGroupRunner()
+			process = ifrit.Invoke(ordererRunner)
+			Eventually(process.Wait, network.EventuallyTimeout).Should(Receive()) // orderer process should exit
+			os.RemoveAll(testDir)
+
+			By("Starting orderer with correct genesis block")
+			testDir, err = ioutil.TempDir("", "e2e")
+			Expect(err).NotTo(HaveOccurred())
+			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
+			network.GenerateConfigTree()
+			network.Bootstrap()
+
+			orderer := network.Orderer("orderer")
+			runner := network.OrdererRunner(orderer)
+			process = ifrit.Invoke(runner)
+			Eventually(process.Ready, network.EventuallyTimeout).Should(BeClosed())
+
+			By("Waiting for system channel to be ready")
+			findLeader([]*ginkgomon.Runner{runner})
+
+			By("Creating malformed channel creation config tx")
+			channel := "testchannel"
+			sysProfile = localconfig.Load(network.SystemChannel.Profile, network.RootDir)
+			Expect(sysProfile.Orderer).NotTo(BeNil())
+			appProfile := localconfig.Load(network.ProfileForChannel(channel), network.RootDir)
+			Expect(appProfile).NotTo(BeNil())
+			o := *sysProfile.Orderer
+			appProfile.Orderer = &o
+			appProfile.Orderer.EtcdRaft = proto.Clone(sysProfile.Orderer.EtcdRaft).(*etcdraft.ConfigMetadata)
+			appProfile.Orderer.EtcdRaft.Options.HeartbeatTick = appProfile.Orderer.EtcdRaft.Options.ElectionTick
+			configtx, err := encoder.MakeChannelCreationTransactionWithSystemChannelContext(channel, nil, appProfile, sysProfile)
+			Expect(err).NotTo(HaveOccurred())
+			data, err = proto.Marshal(configtx)
+			Expect(err).NotTo(HaveOccurred())
+			ioutil.WriteFile(network.CreateChannelTxPath(channel), data, 0644)
+
+			By("Submitting malformed channel creation config tx to orderer")
+			peer1org1 := network.Peer("Org1", "peer1")
+			peer1org2 := network.Peer("Org2", "peer1")
+
+			network.CreateChannelFail(channel, orderer, peer1org1, peer1org1, peer1org2, orderer)
+			Consistently(process.Wait).ShouldNot(Receive()) // malformed tx should not crash orderer
+			Expect(runner.Err()).To(gbytes.Say(`rejected by Configure: ElectionTick \(10\) must be greater than HeartbeatTick \(10\)`))
+
+			By("Submitting channel config update with illegal value")
+			channel = network.SystemChannel.Name
+			config := nwo.GetConfig(network, peer1org1, orderer, channel)
+			updatedConfig := proto.Clone(config).(*common.Config)
+
+			consensusTypeConfigValue := updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"]
+			consensusTypeValue := &protosorderer.ConsensusType{}
+			Expect(proto.Unmarshal(consensusTypeConfigValue.Value, consensusTypeValue)).To(Succeed())
+
+			metadata := &etcdraft.ConfigMetadata{}
+			Expect(proto.Unmarshal(consensusTypeValue.Metadata, metadata)).To(Succeed())
+
+			metadata.Options.HeartbeatTick = 10
+			metadata.Options.ElectionTick = 10
+
+			newMetadata, err := proto.Marshal(metadata)
+			Expect(err).NotTo(HaveOccurred())
+			consensusTypeValue.Metadata = newMetadata
+
+			updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"] = &common.ConfigValue{
+				ModPolicy: "Admins",
+				Value:     utils.MarshalOrPanic(consensusTypeValue),
+			}
+
+			nwo.UpdateOrdererConfigFail(network, orderer, channel, config, updatedConfig, peer1org1, orderer)
+		})
+	})
+
+	Describe("etcd raft, checking valid configuration update of type B", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -270,36 +378,34 @@ var _ = Describe("EndToEnd", func() {
 			nwo.DeployChaincode(network, "testchannel", orderer, chaincode)
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel")
 
-			config := nwo.GetConfigBlock(network, peer, orderer, channel)
-			updatedConfig := proto.Clone(config).(*common.Config)
-
-			consensusTypeConfigValue := updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"]
-			consensusTypeValue := &protosorderer.ConsensusType{}
-			err := proto.Unmarshal(consensusTypeConfigValue.Value, consensusTypeValue)
+			snapDir := path.Join(network.RootDir, "orderers", orderer.ID(), "etcdraft", "snapshot", channel)
+			files, err := ioutil.ReadDir(snapDir)
 			Expect(err).NotTo(HaveOccurred())
+			numOfSnaps := len(files)
 
-			metadata := &etcdraft.Metadata{}
-			err = proto.Unmarshal(consensusTypeValue.Metadata, metadata)
+			nwo.UpdateConsensusMetadata(network, peer, orderer, channel, func(originalMetadata []byte) []byte {
+				metadata := &etcdraft.ConfigMetadata{}
+				err := proto.Unmarshal(originalMetadata, metadata)
+				Expect(err).NotTo(HaveOccurred())
+
+				// update max in flight messages
+				metadata.Options.MaxInflightBlocks = 1000
+				metadata.Options.SnapshotIntervalSize = 10 * 1024 * 1024 // 10 MB
+
+				// write metadata back
+				newMetadata, err := proto.Marshal(metadata)
+				Expect(err).NotTo(HaveOccurred())
+				return newMetadata
+			})
+
+			// assert that no new snapshot is taken because SnapshotIntervalSize has just enlarged
+			files, err = ioutil.ReadDir(snapDir)
 			Expect(err).NotTo(HaveOccurred())
-
-			// update max in flight messages
-			metadata.Options.MaxInflightMsgs = 1000
-			metadata.Options.MaxSizePerMsg = 512
-
-			// write metadata back
-			consensusTypeValue.Metadata, err = proto.Marshal(metadata)
-			Expect(err).NotTo(HaveOccurred())
-
-			updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"] = &common.ConfigValue{
-				ModPolicy: "Admins",
-				Value:     utils.MarshalOrPanic(consensusTypeValue),
-			}
-
-			nwo.UpdateOrdererConfig(network, orderer, channel, config, updatedConfig, peer, orderer)
+			Expect(len(files)).To(Equal(numOfSnaps))
 		})
 	})
 
-	PDescribe("basic single node etcdraft network with 2 orgs and 2 channels", func() {
+	Describe("basic single node etcdraft network with 2 orgs and 2 channels", func() {
 		BeforeEach(func() {
 			network = nwo.New(nwo.MultiChannelEtcdRaft(), testDir, client, BasePort(), components)
 			network.GenerateConfigTree()
@@ -318,10 +424,10 @@ var _ = Describe("EndToEnd", func() {
 			nwo.DeployChaincode(network, "testchannel1", orderer, chaincode)
 
 			network.CreateAndJoinChannel(orderer, "testchannel2")
-			nwo.InstantiateChaincode(network, "testchannel2", orderer, chaincode, peer)
+			nwo.InstantiateChaincode(network, "testchannel2", orderer, chaincode, peer, network.PeersWithChannel("testchannel2")...)
 
-			RunQueryInvokeQuery(network, orderer, peer, "testchannel1")
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel2")
+			RunQueryInvokeQuery(network, orderer, peer, "testchannel1")
 		})
 	})
 })

@@ -33,6 +33,9 @@ var logger = flogging.MustGetLogger("common.tools.configtxgen")
 func doOutputBlock(config *genesisconfig.Profile, channelID string, outputBlock string) error {
 	pgen := encoder.New(config)
 	logger.Info("Generating genesis block")
+	if config.Orderer == nil {
+		return errors.Errorf("refusing to generate block which is missing orderer section")
+	}
 	if config.Consortiums == nil {
 		logger.Warning("Genesis block does not contain a consortiums group definition.  This block cannot be used for orderer bootstrap.")
 	}
@@ -45,10 +48,16 @@ func doOutputBlock(config *genesisconfig.Profile, channelID string, outputBlock 
 	return nil
 }
 
-func doOutputChannelCreateTx(conf *genesisconfig.Profile, channelID string, outputChannelCreateTx string) error {
+func doOutputChannelCreateTx(conf, baseProfile *genesisconfig.Profile, channelID string, outputChannelCreateTx string) error {
 	logger.Info("Generating new channel configtx")
 
-	configtx, err := encoder.MakeChannelCreationTransaction(channelID, nil, conf)
+	var configtx *cb.Envelope
+	var err error
+	if baseProfile == nil {
+		configtx, err = encoder.MakeChannelCreationTransaction(channelID, nil, conf)
+	} else {
+		configtx, err = encoder.MakeChannelCreationTransactionWithSystemChannelContext(channelID, nil, conf, baseProfile)
+	}
 	if err != nil {
 		return err
 	}
@@ -204,11 +213,12 @@ func doPrintOrg(t *genesisconfig.TopLevel, printOrg string) error {
 }
 
 func main() {
-	var outputBlock, outputChannelCreateTx, profile, configPath, channelID, inspectBlock, inspectChannelCreateTx, outputAnchorPeersUpdate, asOrg, printOrg string
+	var outputBlock, outputChannelCreateTx, channelCreateTxBaseProfile, profile, configPath, channelID, inspectBlock, inspectChannelCreateTx, outputAnchorPeersUpdate, asOrg, printOrg string
 
 	flag.StringVar(&outputBlock, "outputBlock", "", "The path to write the genesis block to (if set)")
 	flag.StringVar(&channelID, "channelID", "", "The channel ID to use in the configtx")
 	flag.StringVar(&outputChannelCreateTx, "outputCreateChannelTx", "", "The path to write a channel creation configtx to (if set)")
+	flag.StringVar(&channelCreateTxBaseProfile, "channelCreateTxBaseProfile", "", "Specifies a profile to consider as the orderer system channel current state to allow modification of non-application parameters during channel create tx generation. Only valid in conjuction with 'outputCreateChannelTx'.")
 	flag.StringVar(&profile, "profile", genesisconfig.SampleInsecureSoloProfile, "The profile from configtx.yaml to use for generation.")
 	flag.StringVar(&configPath, "configPath", "", "The path containing the configuration to use (if set)")
 	flag.StringVar(&inspectBlock, "inspectBlock", "", "Prints the configuration contained in the block at the specified path")
@@ -268,6 +278,18 @@ func main() {
 		topLevelConfig = genesisconfig.LoadTopLevel()
 	}
 
+	var baseProfile *genesisconfig.Profile
+	if channelCreateTxBaseProfile != "" {
+		if outputChannelCreateTx == "" {
+			logger.Warning("Specified 'channelCreateTxBaseProfile', but did not specify 'outputChannelCreateTx', 'channelCreateTxBaseProfile' will not affect output.")
+		}
+		if configPath != "" {
+			baseProfile = genesisconfig.Load(channelCreateTxBaseProfile, configPath)
+		} else {
+			baseProfile = genesisconfig.Load(channelCreateTxBaseProfile)
+		}
+	}
+
 	if outputBlock != "" {
 		if err := doOutputBlock(profileConfig, channelID, outputBlock); err != nil {
 			logger.Fatalf("Error on outputBlock: %s", err)
@@ -275,7 +297,7 @@ func main() {
 	}
 
 	if outputChannelCreateTx != "" {
-		if err := doOutputChannelCreateTx(profileConfig, channelID, outputChannelCreateTx); err != nil {
+		if err := doOutputChannelCreateTx(profileConfig, baseProfile, channelID, outputChannelCreateTx); err != nil {
 			logger.Fatalf("Error on outputChannelCreateTx: %s", err)
 		}
 	}
