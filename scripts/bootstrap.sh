@@ -10,7 +10,7 @@ export VERSION=1.4.0
 # if ca version not passed in, default to latest released version
 export CA_VERSION=$VERSION
 # current version of thirdparty images (couchdb, kafka and zookeeper) released
-export THIRDPARTY_IMAGE_VERSION=0.4.14
+export THIRDPARTY_IMAGE_VERSION=0.4.15
 export ARCH=$(echo "$(uname -s|tr '[:upper:]' '[:lower:]'|sed 's/mingw64_nt.*/windows/')-$(uname -m | sed 's/x86_64/amd64/g')")
 export MARCH=$(uname -m)
 
@@ -176,11 +176,11 @@ BINARIES=true
 
 # Parse commandline args pull out
 # version and/or ca-version strings first
-if [ ! -z "$1" -a ${1:0:1} != "-" ]; then
+if [ ! -z "$1" -a "${1:0:1}" != "-" ]; then
   VERSION=$1;shift
-  if [ ! -z "$1"  -a ${1:0:1} != "-" ]; then
+  if [ ! -z "$1"  -a "${1:0:1}" != "-" ]; then
     CA_VERSION=$1;shift
-    if [ ! -z "$1"  -a ${1:0:1} != "-" ]; then
+    if [ ! -z "$1"  -a "${1:0:1}" != "-" ]; then
       THIRDPARTY_IMAGE_VERSION=$1;shift
     fi
   fi

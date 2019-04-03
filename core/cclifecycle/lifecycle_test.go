@@ -22,7 +22,7 @@ import (
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger/cceventmgmt"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 	"github.com/pkg/errors"
@@ -71,20 +71,20 @@ func TestHandleChaincodeDeployGreenPath(t *testing.T) {
 	recorder, restoreLogger := newLogRecorder(t)
 	defer restoreLogger()
 
-	cc1Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc1Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc1",
 		Version: "1.0",
 		Id:      []byte{42},
 		Policy:  []byte{1, 2, 3, 4, 5},
 	})
 
-	cc2Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc2Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc2",
 		Version: "1.0",
 		Id:      []byte{42},
 	})
 
-	cc3Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc3Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc3",
 		Version: "1.0",
 		Id:      []byte{42},
@@ -103,19 +103,19 @@ func TestHandleChaincodeDeployGreenPath(t *testing.T) {
 		{
 			Name:    "cc1",
 			Version: "1.0",
-			Id:      []byte{42},
+			Hash:    []byte{42},
 		},
 		{
 			// This chaincode has a different version installed than is instantiated
 			Name:    "cc2",
 			Version: "1.1",
-			Id:      []byte{50},
+			Hash:    []byte{50},
 		},
 		{
 			// This chaincode isn't instantiated on the channel (the Id is 50 but in the state its 42), but is installed
 			Name:    "cc3",
 			Version: "1.0",
-			Id:      []byte{50},
+			Hash:    []byte{50},
 		},
 	}, nil)
 
@@ -140,7 +140,7 @@ func TestHandleChaincodeDeployGreenPath(t *testing.T) {
 	}})
 
 	// Signal a deployment of a new chaincode and make sure the chaincode listener is updated with both chaincodes
-	cc3Bytes = utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc3Bytes = protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc3",
 		Version: "1.0",
 		Id:      []byte{50},
@@ -165,7 +165,7 @@ func TestHandleChaincodeDeployGreenPath(t *testing.T) {
 
 	// Next, update the chaincode metadata of the second chaincode to ensure that the listener is called with the updated
 	// metadata and not with the old metadata.
-	cc3Bytes = utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc3Bytes = protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc3",
 		Version: "1.1",
 		Id:      []byte{50},
@@ -193,7 +193,7 @@ func TestHandleChaincodeDeployFailures(t *testing.T) {
 	recorder, restoreLogger := newLogRecorder(t)
 	defer restoreLogger()
 
-	cc1Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc1Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc1",
 		Version: "1.0",
 		Id:      []byte{42},
@@ -208,7 +208,7 @@ func TestHandleChaincodeDeployFailures(t *testing.T) {
 		{
 			Name:    "cc1",
 			Version: "1.0",
-			Id:      []byte{42},
+			Hash:    []byte{42},
 		},
 	}, nil)
 
@@ -271,13 +271,13 @@ func TestMultipleUpdates(t *testing.T) {
 	recorder, restoreLogger := newLogRecorder(t)
 	defer restoreLogger()
 
-	cc1Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc1Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc1",
 		Version: "1.1",
 		Id:      []byte{42},
 		Policy:  []byte{1, 2, 3, 4, 5},
 	})
-	cc2Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc2Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc2",
 		Version: "1.0",
 		Id:      []byte{50},
@@ -296,12 +296,12 @@ func TestMultipleUpdates(t *testing.T) {
 		{
 			Name:    "cc1",
 			Version: "1.1",
-			Id:      []byte{42},
+			Hash:    []byte{42},
 		},
 		{
 			Name:    "cc2",
 			Version: "1.0",
-			Id:      []byte{50},
+			Hash:    []byte{50},
 		},
 	}, nil)
 
@@ -323,7 +323,6 @@ func TestMultipleUpdates(t *testing.T) {
 	sub.HandleChaincodeDeploy(&cceventmgmt.ChaincodeDefinition{Name: "cc2", Version: "1.0", Hash: []byte{50}}, nil)
 	sub.ChaincodeDeployDone(true)
 
-	assertLogged(t, recorder, "Listeners for channel mychannel invoked")
 	cc1MD := chaincode.Metadata{
 		Name:    "cc1",
 		Version: "1.1",
@@ -355,14 +354,14 @@ func TestMetadata(t *testing.T) {
 	recorder, restoreLogger := newLogRecorder(t)
 	defer restoreLogger()
 
-	cc1Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc1Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc1",
 		Version: "1.0",
 		Id:      []byte{42},
 		Policy:  []byte{1, 2, 3, 4, 5},
 	})
 
-	cc2Bytes := utils.MarshalOrPanic(&ccprovider.ChaincodeData{
+	cc2Bytes := protoutil.MarshalOrPanic(&ccprovider.ChaincodeData{
 		Name:    "cc2",
 		Version: "1.0",
 		Id:      []byte{42},
@@ -378,7 +377,7 @@ func TestMetadata(t *testing.T) {
 		{
 			Name:    "cc1",
 			Version: "1.0",
-			Id:      []byte{42},
+			Hash:    []byte{42},
 		},
 	}, nil)
 

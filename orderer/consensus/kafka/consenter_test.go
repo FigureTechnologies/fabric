@@ -12,19 +12,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shopify/sarama"
+	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/flogging"
 	mockconfig "github.com/hyperledger/fabric/common/mocks/config"
-	localconfig "github.com/hyperledger/fabric/orderer/common/localconfig"
+	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/orderer/consensus/kafka/mock"
+	mockconsensus "github.com/hyperledger/fabric/orderer/consensus/mocks"
 	mockmultichannel "github.com/hyperledger/fabric/orderer/mocks/common/multichannel"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
-	"github.com/hyperledger/fabric/protos/utils"
-
-	"github.com/Shopify/sarama"
-	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var mockRetryOptions = localconfig.Retry{
@@ -71,12 +72,12 @@ func init() {
 }
 
 func TestNew(t *testing.T) {
-	c, _ := New(mockLocalConfig.Kafka, &mock.MetricsProvider{})
+	c, _ := New(mockLocalConfig, &mock.MetricsProvider{}, &mock.HealthChecker{}, &mockconsensus.FakeController{})
 	_ = consensus.Consenter(c)
 }
 
 func TestHandleChain(t *testing.T) {
-	consenter, _ := New(mockLocalConfig.Kafka, &mock.MetricsProvider{})
+	consenter, _ := New(mockLocalConfig, &mock.MetricsProvider{}, &mock.HealthChecker{}, &mockconsensus.FakeController{})
 
 	oldestOffset := int64(0)
 	newestOffset := int64(5)
@@ -105,9 +106,24 @@ func TestHandleChain(t *testing.T) {
 		},
 	}
 
-	mockMetadata := &cb.Metadata{Value: utils.MarshalOrPanic(&ab.KafkaMetadata{LastOffsetPersisted: newestOffset - 1})}
+	mockMetadata := &cb.Metadata{Value: protoutil.MarshalOrPanic(&ab.KafkaMetadata{LastOffsetPersisted: newestOffset - 1})}
 	_, err := consenter.HandleChain(mockSupport, mockMetadata)
 	assert.NoError(t, err, "Expected the HandleChain call to return without errors")
+}
+
+func TestMigration(t *testing.T) {
+	consenter, _ := New(mockLocalConfig, &mock.MetricsProvider{}, &mock.HealthChecker{}, &mockconsensus.FakeController{})
+	consenterimpl := consenter.(*consenterImpl)
+	require.NotNil(t, consenterimpl.migrationController())
+	assert.NoError(t, consenterimpl.migrationController().ConsensusMigrationStart(111))
+	assert.NoError(t, consenterimpl.migrationController().ConsensusMigrationCommit())
+	assert.Equal(t, "", consenterimpl.bootstrapFile())
+
+	mockLocalConfig.General.GenesisFile = "abc.genesis.block"
+	mockLocalConfig.General.GenesisMethod = "file"
+	consenter, _ = New(mockLocalConfig, &mock.MetricsProvider{}, &mock.HealthChecker{}, &mockconsensus.FakeController{})
+	consenterimpl = consenter.(*consenterImpl)
+	assert.Equal(t, mockLocalConfig.General.GenesisFile, consenterimpl.bootstrapFile())
 }
 
 // Test helper functions and mock objects defined here
@@ -152,13 +168,13 @@ func newMockConsenter(brokerConfig *sarama.Config, tlsConfig localconfig.TLS, re
 
 func newMockConsumerMessage(wrappedMessage *ab.KafkaMessage) *sarama.ConsumerMessage {
 	return &sarama.ConsumerMessage{
-		Value: sarama.ByteEncoder(utils.MarshalOrPanic(wrappedMessage)),
+		Value: sarama.ByteEncoder(protoutil.MarshalOrPanic(wrappedMessage)),
 	}
 }
 
 func newMockEnvelope(content string) *cb.Envelope {
-	return &cb.Envelope{Payload: utils.MarshalOrPanic(&cb.Payload{
-		Header: &cb.Header{ChannelHeader: utils.MarshalOrPanic(&cb.ChannelHeader{ChannelId: "foo"})},
+	return &cb.Envelope{Payload: protoutil.MarshalOrPanic(&cb.Payload{
+		Header: &cb.Header{ChannelHeader: protoutil.MarshalOrPanic(&cb.ChannelHeader{ChannelId: "foo"})},
 		Data:   []byte(content),
 	})}
 }

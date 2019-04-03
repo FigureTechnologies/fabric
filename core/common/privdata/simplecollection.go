@@ -14,6 +14,7 @@ import (
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protos/common"
 	m "github.com/hyperledger/fabric/protos/msp"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
 
@@ -46,6 +47,8 @@ func (sc *SimpleCollection) RequiredPeerCount() int {
 	return int(sc.conf.RequiredPeerCount)
 }
 
+// MaximumPeerCount returns the maximum number of peers
+// to which the private data will be sent
 func (sc *SimpleCollection) MaximumPeerCount() int {
 	return int(sc.conf.MaximumPeerCount)
 }
@@ -53,16 +56,24 @@ func (sc *SimpleCollection) MaximumPeerCount() int {
 // AccessFilter returns the member filter function that evaluates signed data
 // against the member access policy of this collection
 func (sc *SimpleCollection) AccessFilter() Filter {
-	return func(sd common.SignedData) bool {
-		if err := sc.accessPolicy.Evaluate([]*common.SignedData{&sd}); err != nil {
+	return func(sd protoutil.SignedData) bool {
+		if err := sc.accessPolicy.Evaluate([]*protoutil.SignedData{&sd}); err != nil {
 			return false
 		}
 		return true
 	}
 }
 
+// IsMemberOnlyRead returns whether only collection member
+// has the read permission
 func (sc *SimpleCollection) IsMemberOnlyRead() bool {
 	return sc.conf.MemberOnlyRead
+}
+
+// IsMemberOnlyWrite returns whether only collection member
+// has the write permission
+func (sc *SimpleCollection) IsMemberOnlyWrite() bool {
+	return sc.conf.MemberOnlyWrite
 }
 
 // Setup configures a simple collection object based on a given

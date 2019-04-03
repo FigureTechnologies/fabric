@@ -233,9 +233,19 @@ func (c *validationContext) waitForValidationResults(kid *ledgerKeyID, blockNum 
 /**********************************************************************************************************/
 /**********************************************************************************************************/
 
+// PolicyTranslator translates marshaled policies
+// into different protobuf representations
+type PolicyTranslator interface {
+	// Translate performs the translation of the
+	// supplied bytes, returning the translated
+	// version or an error if one occurred
+	Translate([]byte) ([]byte, error)
+}
+
 type KeyLevelValidationParameterManagerImpl struct {
-	StateFetcher  validation.StateFetcher
-	validationCtx validationContext
+	StateFetcher     validation.StateFetcher
+	validationCtx    validationContext
+	PolicyTranslator PolicyTranslator
 }
 
 // ExtractValidationParameterDependency implements the method of
@@ -326,7 +336,16 @@ func (m *KeyLevelValidationParameterManagerImpl) GetValidationParameterForKey(cc
 		}
 	}
 
-	return mdMap[pb.MetaDataKeys_VALIDATION_PARAMETER.String()], nil
+	policy, err := m.PolicyTranslator.Translate(mdMap[pb.MetaDataKeys_VALIDATION_PARAMETER.String()])
+	if err != nil {
+		if coll == "" {
+			return nil, errors.WithMessagef(err, "could not translate policy for %s:%s", cc, key)
+		} else {
+			return nil, errors.WithMessagef(err, "could not translate policy for %s:%s:%x", cc, coll, []byte(key))
+		}
+	}
+
+	return policy, nil
 }
 
 // SetTxValidationCode implements the method of the same name of

@@ -2,11 +2,11 @@
 package fake
 
 import (
-	sync "sync"
+	"sync"
 
-	ledger "github.com/hyperledger/fabric/common/ledger"
-	chaincode "github.com/hyperledger/fabric/core/chaincode"
-	peer "github.com/hyperledger/fabric/protos/peer"
+	"github.com/hyperledger/fabric/common/ledger"
+	"github.com/hyperledger/fabric/core/chaincode"
+	"github.com/hyperledger/fabric/protos/peer"
 )
 
 type QueryResponseBuilder struct {

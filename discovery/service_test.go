@@ -17,9 +17,10 @@ import (
 	"github.com/hyperledger/fabric/gossip/api"
 	gcommon "github.com/hyperledger/fabric/gossip/common"
 	gdisc "github.com/hyperledger/fabric/gossip/discovery"
-	"github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/protos/discovery"
 	"github.com/hyperledger/fabric/protos/gossip"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -519,7 +520,7 @@ func (*mockSupport) Chaincodes(id gcommon.ChainID) []*gossip.Chaincode {
 	panic("implement me")
 }
 
-func (ms *mockSupport) EligibleForService(channel string, data common.SignedData) error {
+func (ms *mockSupport) EligibleForService(channel string, data protoutil.SignedData) error {
 	return ms.Called(channel, data).Error(0)
 }
 
@@ -551,7 +552,7 @@ func stateInfoMsg(id int) gdisc.NetworkMember {
 			StateInfo: si,
 		},
 	}
-	sm, _ := gm.NoopSign()
+	sm, _ := protoext.NoopSign(gm)
 	return gdisc.NetworkMember{
 		PKIid:    pkiID,
 		Envelope: sm.Envelope,
@@ -572,7 +573,7 @@ func aliveMsg(id int) gdisc.NetworkMember {
 			AliveMsg: am,
 		},
 	}
-	sm, _ := gm.NoopSign()
+	sm, _ := protoext.NoopSign(gm)
 	return gdisc.NetworkMember{
 		PKIid:    pkiID,
 		Endpoint: endpoint,

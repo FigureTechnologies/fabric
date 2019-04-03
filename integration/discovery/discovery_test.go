@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/cauthdsl"
 	"github.com/hyperledger/fabric/integration/nwo"
@@ -22,7 +22,7 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/discovery"
 	pm "github.com/hyperledger/fabric/protos/msp"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -55,7 +55,7 @@ var _ = Describe("DiscoveryService", func() {
 		err = yaml.Unmarshal(configBytes, &networkConfig)
 		Expect(err).NotTo(HaveOccurred())
 
-		network = nwo.New(networkConfig, testDir, client, 35000+1000*GinkgoParallelNode(), components)
+		network = nwo.New(networkConfig, testDir, client, StartPort(), components)
 		network.GenerateConfigTree()
 		network.Bootstrap()
 
@@ -108,7 +108,7 @@ var _ = Describe("DiscoveryService", func() {
 		}
 		nwo.DeployChaincode(network, "testchannel", orderer, chaincode, org1Peer0)
 
-		By("discovering endorsers for chaincode that has not been installed to enough orgs to satisy endorsement policy")
+		By("discovering endorsers for chaincode that has not been installed to enough orgs to satisfy endorsement policy")
 		sess, err = network.Discover(endorsers)
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit(1))
@@ -177,10 +177,10 @@ var _ = Describe("DiscoveryService", func() {
 		Expect(discovered[0].Layouts[0].QuantitiesByGroup).To(ConsistOf(uint32(1), uint32(1), uint32(1)))
 
 		By("changing the channel policy")
-		currentConfig := nwo.GetConfigBlock(network, network.Peer("org3", "peer0"), orderer, "testchannel")
+		currentConfig := nwo.GetConfig(network, network.Peer("org3", "peer0"), orderer, "testchannel")
 		updatedConfig := proto.Clone(currentConfig).(*common.Config)
-		updatedConfig.ChannelGroup.Groups["Application"].Groups["org3"].Policies["Writers"].Policy.Value = utils.MarshalOrPanic(cauthdsl.SignedByMspAdmin("Org3MSP"))
-		nwo.UpdateConfig(network, orderer, "testchannel", currentConfig, updatedConfig, network.Peer("org3", "peer0"))
+		updatedConfig.ChannelGroup.Groups["Application"].Groups["org3"].Policies["Writers"].Policy.Value = protoutil.MarshalOrPanic(cauthdsl.SignedByMspAdmin("Org3MSP"))
+		nwo.UpdateConfig(network, orderer, "testchannel", currentConfig, updatedConfig, true, network.Peer("org3", "peer0"))
 
 		By("trying to discover peers as an org 3 member")
 		endorsers = commands.Endorsers{

@@ -8,24 +8,28 @@ package privdata
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/rand"
 	"sync"
 	"time"
 
+	commonutil "github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/comm"
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/discovery"
 	"github.com/hyperledger/fabric/gossip/filter"
+	"github.com/hyperledger/fabric/gossip/metrics"
 	privdatacommon "github.com/hyperledger/fabric/gossip/privdata/common"
+	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
 	fcommon "github.com/hyperledger/fabric/protos/common"
 	proto "github.com/hyperledger/fabric/protos/gossip"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
-	"github.com/spf13/viper"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -33,7 +37,6 @@ const (
 	membershipPollingBackoff    = time.Second
 	responseWaitTime            = time.Second * 5
 	maxMembershipPollIterations = 5
-	btlPullMarginDefault        = 10
 )
 
 // Dig2PvtRWSetWithConfig
@@ -63,13 +66,14 @@ type gossip interface {
 	// If passThrough is false, the messages are processed by the gossip layer beforehand.
 	// If passThrough is true, the gossip layer doesn't intervene and the messages
 	// can be used to send a reply back to the sender
-	Accept(acceptor common.MessageAcceptor, passThrough bool) (<-chan *proto.GossipMessage, <-chan proto.ReceivedMessage)
+	Accept(acceptor common.MessageAcceptor, passThrough bool) (<-chan *proto.GossipMessage, <-chan protoext.ReceivedMessage)
 }
 
 type puller struct {
+	metrics       *metrics.PrivdataMetrics
 	pubSub        *util.PubSub
 	stopChan      chan struct{}
-	msgChan       <-chan proto.ReceivedMessage
+	msgChan       <-chan protoext.ReceivedMessage
 	channel       string
 	cs            privdata.CollectionStore
 	btlPullMargin uint64
@@ -79,23 +83,25 @@ type puller struct {
 }
 
 // NewPuller creates new private data puller
-func NewPuller(cs privdata.CollectionStore, g gossip, dataRetriever PrivateDataRetriever, factory CollectionAccessFactory, channel string) *puller {
+func NewPuller(metrics *metrics.PrivdataMetrics, cs privdata.CollectionStore, g gossip,
+	dataRetriever PrivateDataRetriever, factory CollectionAccessFactory, channel string, btlPullMargin uint64) *puller {
 	p := &puller{
+		metrics:                 metrics,
 		pubSub:                  util.NewPubSub(),
 		stopChan:                make(chan struct{}),
 		channel:                 channel,
 		cs:                      cs,
-		btlPullMargin:           getBtlPullMargin(),
+		btlPullMargin:           btlPullMargin,
 		gossip:                  g,
 		PrivateDataRetriever:    dataRetriever,
 		CollectionAccessFactory: factory,
 	}
 	_, p.msgChan = p.Accept(func(o interface{}) bool {
-		msg := o.(proto.ReceivedMessage).GetGossipMessage()
+		msg := o.(protoext.ReceivedMessage).GetGossipMessage()
 		if !bytes.Equal(msg.Channel, []byte(p.channel)) {
 			return false
 		}
-		return msg.IsPrivateDataMsg()
+		return protoext.IsPrivateDataMsg(msg.GossipMessage)
 	}, true)
 	go p.listen()
 	return p
@@ -122,7 +128,7 @@ func (p *puller) listen() {
 	}
 }
 
-func (p *puller) handleRequest(message proto.ReceivedMessage) {
+func (p *puller) handleRequest(message protoext.ReceivedMessage) {
 	logger.Debug("Got", message.GetGossipMessage(), "from", message.GetConnectionInfo().Endpoint)
 	message.Respond(&proto.GossipMessage{
 		Channel: []byte(p.channel),
@@ -136,7 +142,7 @@ func (p *puller) handleRequest(message proto.ReceivedMessage) {
 	})
 }
 
-func (p *puller) createResponse(message proto.ReceivedMessage) []*proto.PvtDataElement {
+func (p *puller) createResponse(message protoext.ReceivedMessage) []*proto.PvtDataElement {
 	authInfo := message.GetConnectionInfo().Auth
 	var returned []*proto.PvtDataElement
 	connectionEndpoint := message.GetConnectionInfo().Endpoint
@@ -150,12 +156,14 @@ func (p *puller) createResponse(message proto.ReceivedMessage) []*proto.PvtDataE
 	block2dig := groupDigestsByBlockNum(msg.GetPrivateReq().Digests)
 
 	for blockNum, digests := range block2dig {
+		start := time.Now()
 		dig2rwSets, wasFetchedFromLedger, err := p.CollectionRWSet(digests, blockNum)
+		p.metrics.RetrieveDuration.With("channel", p.channel).Observe(time.Since(start).Seconds())
 		if err != nil {
 			logger.Warningf("could not obtain private collection rwset for block %d, because of %s, continue...", blockNum, err)
 			continue
 		}
-		returned = append(returned, p.filterNotEligible(dig2rwSets, wasFetchedFromLedger, fcommon.SignedData{
+		returned = append(returned, p.filterNotEligible(dig2rwSets, wasFetchedFromLedger, protoutil.SignedData{
 			Identity:  message.GetConnectionInfo().Identity,
 			Data:      authInfo.SignedData,
 			Signature: authInfo.Signature,
@@ -173,7 +181,7 @@ func groupDigestsByBlockNum(digests []*proto.PvtDataDigest) map[uint64][]*proto.
 	return results
 }
 
-func (p *puller) handleResponse(message proto.ReceivedMessage) {
+func (p *puller) handleResponse(message protoext.ReceivedMessage) {
 	msg := message.GetGossipMessage().GetPrivateRes()
 	logger.Debug("Got", msg, "from", message.GetConnectionInfo().Endpoint)
 	for _, el := range msg.Elements {
@@ -181,13 +189,22 @@ func (p *puller) handleResponse(message proto.ReceivedMessage) {
 			logger.Warning("Got nil digest from", message.GetConnectionInfo().Endpoint, "aborting")
 			return
 		}
-		hash, err := el.Digest.Hash()
+		hash, err := hashDigest(el.Digest)
 		if err != nil {
 			logger.Warning("Failed hashing digest from", message.GetConnectionInfo().Endpoint, "aborting")
 			return
 		}
 		p.pubSub.Publish(hash, el)
 	}
+}
+
+// hashDigest returns the SHA256 representation of the PvtDataDigest's bytes
+func hashDigest(dig *proto.PvtDataDigest) (string, error) {
+	b, err := protoutil.Marshal(dig)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(commonutil.ComputeSHA256(b)), nil
 }
 
 func (p *puller) waitForMembership() []discovery.NetworkMember {
@@ -298,6 +315,7 @@ func (p *puller) gatherResponses(subscriptions []util.Subscription) []*proto.Pvt
 	privateElements := make(chan *proto.PvtDataElement, len(subscriptions))
 	var wg sync.WaitGroup
 	wg.Add(len(subscriptions))
+	start := time.Now()
 	// Listen for all subscriptions, and add then into a single channel
 	for _, sub := range subscriptions {
 		go func(sub util.Subscription) {
@@ -307,6 +325,7 @@ func (p *puller) gatherResponses(subscriptions []util.Subscription) []*proto.Pvt
 				return
 			}
 			privateElements <- el.(*proto.PvtDataElement)
+			p.metrics.PullDuration.With("channel", p.channel).Observe(time.Since(start).Seconds())
 		}(sub)
 	}
 	// Wait for all subscriptions to either return, or time out
@@ -336,7 +355,7 @@ func (p *puller) scatterRequests(peersDigestMapping peer2Digests) []util.Subscri
 
 		// Subscribe to all digests prior to sending them
 		for _, dig := range msg.GetPrivateReq().Digests {
-			hash, err := dig.Hash()
+			hash, err := hashDigest(dig)
 			if err != nil {
 				// Shouldn't happen as we just built this message ourselves
 				logger.Warning("Failed creating digest", err)
@@ -529,7 +548,7 @@ func (p *puller) getLatestCollectionConfigRoutingFilter(chaincode string, collec
 
 func (p *puller) getMatchAllRoutingFilter(filt privdata.Filter) (filter.RoutingFilter, error) {
 	routingFilter, err := p.PeerFilter(common.ChainID(p.channel), func(peerSignature api.PeerSignature) bool {
-		return filt(fcommon.SignedData{
+		return filt(protoutil.SignedData{
 			Signature: peerSignature.Signature,
 			Identity:  peerSignature.PeerIdentity,
 			Data:      peerSignature.Message,
@@ -594,7 +613,7 @@ func (p *puller) purgedFilter(dig privdatacommon.DigKey) (filter.RoutingFilter, 
 	}, nil
 }
 
-func (p *puller) filterNotEligible(dig2rwSets Dig2PvtRWSetWithConfig, shouldCheckLatestConfig bool, signedData fcommon.SignedData, endpoint string) []*proto.PvtDataElement {
+func (p *puller) filterNotEligible(dig2rwSets Dig2PvtRWSetWithConfig, shouldCheckLatestConfig bool, signedData protoutil.SignedData, endpoint string) []*proto.PvtDataElement {
 	var returned []*proto.PvtDataElement
 	for d, rwSets := range dig2rwSets {
 		if rwSets == nil {
@@ -642,7 +661,7 @@ func (p *puller) filterNotEligible(dig2rwSets Dig2PvtRWSetWithConfig, shouldChec
 	return returned
 }
 
-func (p *puller) isEligibleByLatestConfig(channel string, collection string, chaincode string, signedData fcommon.SignedData) bool {
+func (p *puller) isEligibleByLatestConfig(channel string, collection string, chaincode string, signedData protoutil.SignedData) bool {
 	cc := fcommon.CollectionCriteria{
 		Channel:    channel,
 		Collection: collection,
@@ -689,21 +708,6 @@ func (rp remotePeer) AsRemotePeer() *comm.RemotePeer {
 		PKIID:    common.PKIidType(rp.pkiID),
 		Endpoint: rp.endpoint,
 	}
-}
-
-func getBtlPullMargin() uint64 {
-	var result uint64
-	if viper.IsSet("peer.gossip.pvtData.btlPullMargin") {
-		btlMarginVal := viper.GetInt("peer.gossip.pvtData.btlPullMargin")
-		if btlMarginVal < 0 {
-			result = btlPullMarginDefault
-		} else {
-			result = uint64(btlMarginVal)
-		}
-	} else {
-		result = btlPullMarginDefault
-	}
-	return result
 }
 
 func addWithOverflow(a uint64, b uint64) uint64 {

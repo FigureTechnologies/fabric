@@ -12,11 +12,9 @@ import (
 	"regexp"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric/common/channelconfig"
 	commonerrors "github.com/hyperledger/fabric/common/errors"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
-	"github.com/hyperledger/fabric/core/chaincode/platforms/car"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/ccmetadata"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/golang"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/java"
@@ -27,13 +25,14 @@ import (
 	. "github.com/hyperledger/fabric/core/handlers/validation/api/identities"
 	. "github.com/hyperledger/fabric/core/handlers/validation/api/policies"
 	. "github.com/hyperledger/fabric/core/handlers/validation/api/state"
+	"github.com/hyperledger/fabric/core/handlers/validation/builtin/internal/car"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/core/scc/lscc"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
 	"github.com/hyperledger/fabric/protos/msp"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
 
@@ -82,20 +81,20 @@ func (vscc *Validator) Validate(
 	policyBytes []byte,
 ) commonerrors.TxValidationError {
 	// get the envelope...
-	env, err := utils.GetEnvelopeFromBlock(block.Data.Data[txPosition])
+	env, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[txPosition])
 	if err != nil {
 		logger.Errorf("VSCC error: GetEnvelope failed, err %s", err)
 		return policyErr(err)
 	}
 
 	// ...and the payload...
-	payl, err := utils.GetPayload(env)
+	payl, err := protoutil.GetPayload(env)
 	if err != nil {
 		logger.Errorf("VSCC error: GetPayload failed, err %s", err)
 		return policyErr(err)
 	}
 
-	chdr, err := utils.UnmarshalChannelHeader(payl.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payl.Header.ChannelHeader)
 	if err != nil {
 		return policyErr(err)
 	}
@@ -107,13 +106,13 @@ func (vscc *Validator) Validate(
 	}
 
 	// ...and the transaction...
-	tx, err := utils.GetTransaction(payl.Data)
+	tx, err := protoutil.GetTransaction(payl.Data)
 	if err != nil {
 		logger.Errorf("VSCC error: GetTransaction failed, err %s", err)
 		return policyErr(err)
 	}
 
-	cap, err := utils.GetChaincodeActionPayload(tx.Actions[actionPosition].Payload)
+	cap, err := protoutil.GetChaincodeActionPayload(tx.Actions[actionPosition].Payload)
 	if err != nil {
 		logger.Errorf("VSCC error: GetChaincodeActionPayload failed, err %s", err)
 		return policyErr(err)
@@ -151,13 +150,13 @@ func (vscc *Validator) Validate(
 // checkInstantiationPolicy evaluates an instantiation policy against a signed proposal
 func (vscc *Validator) checkInstantiationPolicy(chainName string, env *common.Envelope, instantiationPolicy []byte, payl *common.Payload) commonerrors.TxValidationError {
 	// get the signature header
-	shdr, err := utils.GetSignatureHeader(payl.Header.SignatureHeader)
+	shdr, err := protoutil.GetSignatureHeader(payl.Header.SignatureHeader)
 	if err != nil {
 		return policyErr(err)
 	}
 
 	// construct signed data we can evaluate the instantiation policy against
-	sd := []*common.SignedData{{
+	sd := []*protoutil.SignedData{{
 		Data:      env.Payload,
 		Identity:  shdr.Creator,
 		Signature: env.Signature,
@@ -336,7 +335,7 @@ func (vscc *Validator) validateRWSetAndCollection(
 	cdRWSet *ccprovider.ChaincodeData,
 	lsccArgs [][]byte,
 	lsccFunc string,
-	ac channelconfig.ApplicationCapabilities,
+	ac Capabilities,
 	channelName string,
 ) commonerrors.TxValidationError {
 	/********************************************/
@@ -456,9 +455,9 @@ func (vscc *Validator) ValidateLSCCInvocation(
 	env *common.Envelope,
 	cap *pb.ChaincodeActionPayload,
 	payl *common.Payload,
-	ac channelconfig.ApplicationCapabilities,
+	ac Capabilities,
 ) commonerrors.TxValidationError {
-	cpp, err := utils.GetChaincodeProposalPayload(cap.ChaincodeProposalPayload)
+	cpp, err := protoutil.GetChaincodeProposalPayload(cap.ChaincodeProposalPayload)
 	if err != nil {
 		logger.Errorf("VSCC error: GetChaincodeProposalPayload failed, err %s", err)
 		return policyErr(err)
@@ -496,7 +495,7 @@ func (vscc *Validator) ValidateLSCCInvocation(
 			return policyErr(fmt.Errorf("Wrong number of arguments for invocation lscc(%s): received %d", lsccFunc, len(lsccArgs)))
 		}
 
-		cdsArgs, err := utils.GetChaincodeDeploymentSpec(lsccArgs[1], platforms.NewRegistry(
+		cdsArgs, err := protoutil.GetChaincodeDeploymentSpec(lsccArgs[1], platforms.NewRegistry(
 			// XXX We should definitely _not_ have this external dependency in VSCC
 			// as adding a platform could cause non-determinism.  This is yet another
 			// reason why all of this custom LSCC validation at commit time has no
@@ -517,14 +516,14 @@ func (vscc *Validator) ValidateLSCCInvocation(
 		}
 
 		// get the rwset
-		pRespPayload, err := utils.GetProposalResponsePayload(cap.Action.ProposalResponsePayload)
+		pRespPayload, err := protoutil.GetProposalResponsePayload(cap.Action.ProposalResponsePayload)
 		if err != nil {
 			return policyErr(fmt.Errorf("GetProposalResponsePayload error %s", err))
 		}
 		if pRespPayload.Extension == nil {
 			return policyErr(fmt.Errorf("nil pRespPayload.Extension"))
 		}
-		respPayload, err := utils.GetChaincodeAction(pRespPayload.Extension)
+		respPayload, err := protoutil.GetChaincodeAction(pRespPayload.Extension)
 		if err != nil {
 			return policyErr(fmt.Errorf("GetChaincodeAction error %s", err))
 		}
@@ -734,12 +733,12 @@ func (vscc *Validator) getInstantiatedCC(chid, ccid string) (cd *ccprovider.Chai
 	return
 }
 
-func (vscc *Validator) deduplicateIdentity(cap *pb.ChaincodeActionPayload) ([]*common.SignedData, error) {
+func (vscc *Validator) deduplicateIdentity(cap *pb.ChaincodeActionPayload) ([]*protoutil.SignedData, error) {
 	// this is the first part of the signed message
 	prespBytes := cap.Action.ProposalResponsePayload
 
 	// build the signature set for the evaluation
-	signatureSet := []*common.SignedData{}
+	signatureSet := []*protoutil.SignedData{}
 	signatureMap := make(map[string]struct{})
 	// loop through each of the endorsements and build the signature set
 	for _, endorsement := range cap.Action.Endorsements {
@@ -758,7 +757,7 @@ func (vscc *Validator) deduplicateIdentity(cap *pb.ChaincodeActionPayload) ([]*c
 		data := make([]byte, len(prespBytes)+len(endorsement.Endorser))
 		copy(data, prespBytes)
 		copy(data[len(prespBytes):], endorsement.Endorser)
-		signatureSet = append(signatureSet, &common.SignedData{
+		signatureSet = append(signatureSet, &protoutil.SignedData{
 			// set the data that is signed; concatenation of proposal response bytes and endorser ID
 			Data: data,
 			// set the identity that signs the message: it's the endorser

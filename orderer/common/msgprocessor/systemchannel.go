@@ -12,10 +12,12 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
-	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/common/policies"
+	"github.com/hyperledger/fabric/internal/pkg/identity"
 	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
+
+	"github.com/pkg/errors"
 )
 
 // ChannelConfigTemplator can be used to generate config templates.
@@ -57,7 +59,7 @@ func CreateSystemChannelFilters(chainCreator ChainCreator, ledgerResources chann
 // ProcessNormalMsg handles normal messages, rejecting them if they are not bound for the system channel ID
 // with ErrChannelDoesNotExist.
 func (s *SystemChannel) ProcessNormalMsg(msg *cb.Envelope) (configSeq uint64, err error) {
-	channelID, err := utils.ChannelID(msg)
+	channelID, err := protoutil.ChannelID(msg)
 	if err != nil {
 		return 0, err
 	}
@@ -77,7 +79,7 @@ func (s *SystemChannel) ProcessNormalMsg(msg *cb.Envelope) (configSeq uint64, er
 // or, for channel creation.  In the channel creation case, the CONFIG_UPDATE is wrapped into a resulting
 // ORDERER_TRANSACTION, and in the standard CONFIG_UPDATE case, a resulting CONFIG message
 func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (config *cb.Envelope, configSeq uint64, err error) {
-	channelID, err := utils.ChannelID(envConfigUpdate)
+	channelID, err := protoutil.ChannelID(envConfigUpdate)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -101,15 +103,15 @@ func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (co
 
 	newChannelConfigEnv, err := bundle.ConfigtxValidator().ProposeConfigUpdate(envConfigUpdate)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, errors.WithMessage(err, fmt.Sprintf("error validating channel creation transaction for new channel '%s', could not succesfully apply update to template configuration", channelID))
 	}
 
-	newChannelEnvConfig, err := utils.CreateSignedEnvelope(cb.HeaderType_CONFIG, channelID, s.support.Signer(), newChannelConfigEnv, msgVersion, epoch)
+	newChannelEnvConfig, err := protoutil.CreateSignedEnvelope(cb.HeaderType_CONFIG, channelID, s.support.Signer(), newChannelConfigEnv, msgVersion, epoch)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	wrappedOrdererTransaction, err := utils.CreateSignedEnvelope(cb.HeaderType_ORDERER_TRANSACTION, s.support.ChainID(), s.support.Signer(), newChannelEnvConfig, msgVersion, epoch)
+	wrappedOrdererTransaction, err := protoutil.CreateSignedEnvelope(cb.HeaderType_ORDERER_TRANSACTION, s.support.ChainID(), s.support.Signer(), newChannelEnvConfig, msgVersion, epoch)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -118,7 +120,7 @@ func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (co
 	// just constructed is not too large for our consenter.  It additionally reapplies the signature
 	// check, which although not strictly necessary, is a good sanity check, in case the orderer
 	// has not been configured with the right cert material.  The additional overhead of the signature
-	// check is negligable, as this is the channel creation path and not the normal path.
+	// check is negligible, as this is the channel creation path and not the normal path.
 	err = s.StandardChannel.filters.Apply(wrappedOrdererTransaction)
 	if err != nil {
 		return nil, 0, err
@@ -133,7 +135,7 @@ func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (co
 //   - `HeaderType_ORDERER_TRANSACTION`: it's a channel creation message, we unpack `ConfigUpdate` envelope
 //     and run `ProcessConfigUpdateMsg` on it
 func (s *SystemChannel) ProcessConfigMsg(env *cb.Envelope) (*cb.Envelope, uint64, error) {
-	payload, err := utils.UnmarshalPayload(env.Payload)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -146,7 +148,7 @@ func (s *SystemChannel) ProcessConfigMsg(env *cb.Envelope) (*cb.Envelope, uint64
 		return nil, 0, fmt.Errorf("Abort processing config msg because no channel header was set")
 	}
 
-	chdr, err := utils.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
 	if err != nil {
 		return nil, 0, fmt.Errorf("Abort processing config msg because channel header unmarshalling error: %s", err)
 	}
@@ -161,13 +163,13 @@ func (s *SystemChannel) ProcessConfigMsg(env *cb.Envelope) (*cb.Envelope, uint64
 		return s.StandardChannel.ProcessConfigUpdateMsg(configEnvelope.LastUpdate)
 
 	case int32(cb.HeaderType_ORDERER_TRANSACTION):
-		env, err := utils.UnmarshalEnvelope(payload.Data)
+		env, err := protoutil.UnmarshalEnvelope(payload.Data)
 		if err != nil {
 			return nil, 0, fmt.Errorf("Abort processing config msg because payload data unmarshalling error: %s", err)
 		}
 
 		configEnvelope := &cb.ConfigEnvelope{}
-		_, err = utils.UnmarshalEnvelopeOfType(env, cb.HeaderType_CONFIG, configEnvelope)
+		_, err = protoutil.UnmarshalEnvelopeOfType(env, cb.HeaderType_CONFIG, configEnvelope)
 		if err != nil {
 			return nil, 0, fmt.Errorf("Abort processing config msg because payload data unmarshalling error: %s", err)
 		}
@@ -191,7 +193,7 @@ type DefaultTemplatorSupport interface {
 	ConfigtxValidator() configtx.Validator
 
 	// Signer returns the local signer suitable for signing forwarded messages.
-	Signer() crypto.LocalSigner
+	Signer() identity.SignerSerializer
 }
 
 // DefaultTemplator implements the ChannelConfigTemplator interface and is the one used in production deployments.
@@ -208,7 +210,7 @@ func NewDefaultTemplator(support DefaultTemplatorSupport) *DefaultTemplator {
 
 // NewChannelConfig creates a new template channel configuration based on the current config in the ordering system channel.
 func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (channelconfig.Resources, error) {
-	configUpdatePayload, err := utils.UnmarshalPayload(envConfigUpdate.Payload)
+	configUpdatePayload, err := protoutil.UnmarshalPayload(envConfigUpdate.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("Failing initial channel config creation because of payload unmarshaling error: %s", err)
 	}
@@ -222,7 +224,7 @@ func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (chan
 		return nil, fmt.Errorf("Failed initial channel config creation because config update header was missing")
 	}
 
-	channelHeader, err := utils.UnmarshalChannelHeader(configUpdatePayload.Header.ChannelHeader)
+	channelHeader, err := protoutil.UnmarshalChannelHeader(configUpdatePayload.Header.ChannelHeader)
 	if err != nil {
 		return nil, fmt.Errorf("Failed initial channel config creation because channel header was malformed: %s", err)
 	}
@@ -259,7 +261,7 @@ func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (chan
 		return nil, fmt.Errorf("Error reading unmarshaling consortium name: %s", err)
 	}
 
-	applicationGroup := cb.NewConfigGroup()
+	applicationGroup := protoutil.NewConfigGroup()
 	consortiumsConfig, ok := dt.support.ConsortiumsConfig()
 	if !ok {
 		return nil, fmt.Errorf("The ordering system channel does not appear to support creating channels")
@@ -270,10 +272,33 @@ func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (chan
 		return nil, fmt.Errorf("Unknown consortium name: %s", consortium.Name)
 	}
 
-	applicationGroup.Policies[channelconfig.ChannelCreationPolicyKey] = &cb.ConfigPolicy{
-		Policy: consortiumConf.ChannelCreationPolicy(),
+	policyKey := channelconfig.ChannelCreationPolicyKey
+	if oc, ok := dt.support.OrdererConfig(); ok && oc.Capabilities().UseChannelCreationPolicyAsAdmins() {
+		// To support the channel creation process, we use a copy of the Consortium's ChannelCreationPolicy
+		// to govern modification of the application group.  We do this by creating a new policy in the
+		// Application group (with a copy of the policy info from the consortium) and set the mod policy
+		// of the Application group to the name of this policy.  Historically, the name chosen was
+		// "ChannelCreationPolicy".  Because this name did not overlap with the default policy names, the
+		// creation tx simply encoded the Readers/Writers/Admins policies in the write set at Version 0.
+		// However, because there was no /Channel/Application/Admins policy in the template  config,
+		// it made evaluating the /Channel/Admins policy impossible.  When the UseChannelCreationPolicyAsAdmins
+		// capability is enabled, To allow the /Channel/Admins policy to evaluate normally, we now attempt
+		// to use the standard policy name "Admins" instead of "ChannelCreationPolicy", when the user is
+		// submitting a configtx generated by a newer version of configtxgen.  We detect if an old
+		// configtxgen was used to generate the configtx if the /Channel/Application/Admins policy has a
+		//version set to 0.  Otherwise, we use the newer behavior.
+		applicationPolicies := configUpdate.WriteSet.Groups[channelconfig.ApplicationGroupKey].Policies
+		if applicationPolicies != nil {
+			if policy, ok := applicationPolicies[channelconfig.AdminsPolicyKey]; !ok || policy.Version != uint64(0) {
+				policyKey = channelconfig.AdminsPolicyKey
+			}
+		}
 	}
-	applicationGroup.ModPolicy = channelconfig.ChannelCreationPolicyKey
+	applicationGroup.Policies[policyKey] = &cb.ConfigPolicy{
+		Policy:    consortiumConf.ChannelCreationPolicy(),
+		ModPolicy: policyKey,
+	}
+	applicationGroup.ModPolicy = policyKey
 
 	// Get the current system channel config
 	systemChannelGroup := dt.support.ConfigtxValidator().ConfigProto().ChannelGroup
@@ -297,7 +322,7 @@ func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (chan
 		}
 	}
 
-	channelGroup := cb.NewConfigGroup()
+	channelGroup := protoutil.NewConfigGroup()
 
 	// Copy the system channel Channel level config to the new config
 	for key, value := range systemChannelGroup.Values {
@@ -316,7 +341,7 @@ func (dt *DefaultTemplator) NewChannelConfig(envConfigUpdate *cb.Envelope) (chan
 	channelGroup.Groups[channelconfig.OrdererGroupKey] = proto.Clone(systemChannelGroup.Groups[channelconfig.OrdererGroupKey]).(*cb.ConfigGroup)
 	channelGroup.Groups[channelconfig.ApplicationGroupKey] = applicationGroup
 	channelGroup.Values[channelconfig.ConsortiumKey] = &cb.ConfigValue{
-		Value:     utils.MarshalOrPanic(channelconfig.ConsortiumValue(consortium.Name).Value()),
+		Value:     protoutil.MarshalOrPanic(channelconfig.ConsortiumValue(consortium.Name).Value()),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 

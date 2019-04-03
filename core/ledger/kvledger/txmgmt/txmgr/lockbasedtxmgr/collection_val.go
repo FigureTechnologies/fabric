@@ -13,16 +13,21 @@ import (
 // collNameValidator validates the presence of a collection in a namespace
 // This is expected to be instantiated in the context of a simulator/queryexecutor
 type collNameValidator struct {
+	ledgerID       string
 	ccInfoProvider ledger.DeployedChaincodeInfoProvider
 	queryExecutor  *lockBasedQueryExecutor
 	cache          collConfigCache
+	noop           bool
 }
 
-func newCollNameValidator(ccInfoProvider ledger.DeployedChaincodeInfoProvider, qe *lockBasedQueryExecutor) *collNameValidator {
-	return &collNameValidator{ccInfoProvider, qe, make(collConfigCache)}
+func newCollNameValidator(ledgerID string, ccInfoProvider ledger.DeployedChaincodeInfoProvider, qe *lockBasedQueryExecutor, noop bool) *collNameValidator {
+	return &collNameValidator{ledgerID, ccInfoProvider, qe, make(collConfigCache), noop}
 }
 
 func (v *collNameValidator) validateCollName(ns, coll string) error {
+	if v.noop {
+		return nil
+	}
 	if !v.cache.isPopulatedFor(ns) {
 		conf, err := v.retrieveCollConfigFromStateDB(ns)
 		if err != nil {
@@ -41,14 +46,18 @@ func (v *collNameValidator) validateCollName(ns, coll string) error {
 
 func (v *collNameValidator) retrieveCollConfigFromStateDB(ns string) (*common.CollectionConfigPackage, error) {
 	logger.Debugf("retrieveCollConfigFromStateDB() begin - ns=[%s]", ns)
-	ccInfo, err := v.ccInfoProvider.ChaincodeInfo(ns, v.queryExecutor)
+	ccInfo, err := v.ccInfoProvider.ChaincodeInfo(v.ledgerID, ns, v.queryExecutor)
 	if err != nil {
 		return nil, err
 	}
-	if ccInfo == nil || ccInfo.CollectionConfigPkg == nil {
+	if ccInfo == nil {
 		return nil, &ledger.CollConfigNotDefinedError{Ns: ns}
 	}
-	confPkg := ccInfo.CollectionConfigPkg
+
+	confPkg := ccInfo.AllCollectionsConfigPkg()
+	if confPkg == nil {
+		return nil, &ledger.CollConfigNotDefinedError{Ns: ns}
+	}
 	logger.Debugf("retrieveCollConfigFromStateDB() successfully retrieved - ns=[%s], confPkg=[%s]", ns, confPkg)
 	return confPkg, nil
 }

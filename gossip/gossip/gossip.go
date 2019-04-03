@@ -15,6 +15,7 @@ import (
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/discovery"
 	"github.com/hyperledger/fabric/gossip/filter"
+	"github.com/hyperledger/fabric/gossip/protoext"
 	proto "github.com/hyperledger/fabric/protos/gossip"
 )
 
@@ -25,13 +26,13 @@ type Gossip interface {
 	SelfMembershipInfo() discovery.NetworkMember
 
 	// SelfChannelInfo returns the peer's latest StateInfo message of a given channel
-	SelfChannelInfo(common.ChainID) *proto.SignedGossipMessage
+	SelfChannelInfo(common.ChainID) *protoext.SignedGossipMessage
 
 	// Send sends a message to remote peers
 	Send(msg *proto.GossipMessage, peers ...*comm.RemotePeer)
 
 	// SendByCriteria sends a given message to all peers that match the given SendCriteria
-	SendByCriteria(*proto.SignedGossipMessage, SendCriteria) error
+	SendByCriteria(*protoext.SignedGossipMessage, SendCriteria) error
 
 	// GetPeers returns the NetworkMembers considered alive
 	Peers() []discovery.NetworkMember
@@ -63,7 +64,7 @@ type Gossip interface {
 	// If passThrough is false, the messages are processed by the gossip layer beforehand.
 	// If passThrough is true, the gossip layer doesn't intervene and the messages
 	// can be used to send a reply back to the sender
-	Accept(acceptor common.MessageAcceptor, passThrough bool) (<-chan *proto.GossipMessage, <-chan proto.ReceivedMessage)
+	Accept(acceptor common.MessageAcceptor, passThrough bool) (<-chan *proto.GossipMessage, <-chan protoext.ReceivedMessage)
 
 	// JoinChan makes the Gossip instance join a channel
 	JoinChan(joinMsg api.JoinChannelMessage, chainID common.ChainID)
@@ -88,7 +89,7 @@ type Gossip interface {
 // emittedGossipMessage encapsulates signed gossip message to compose
 // with routing filter to be used while message is forwarded
 type emittedGossipMessage struct {
-	*proto.SignedGossipMessage
+	*protoext.SignedGossipMessage
 	filter func(id common.PKIidType) bool
 }
 
@@ -134,4 +135,21 @@ type Config struct {
 	InternalEndpoint         string        // Endpoint we publish to peers in our organization
 	ExternalEndpoint         string        // Peer publishes this endpoint instead of SelfEndpoint to foreign organizations
 	TimeForMembershipTracker time.Duration // Determines time for polling with membershipTracker
+
+	DigestWaitTime   time.Duration // Time to wait before pull engine processes incoming digests
+	RequestWaitTime  time.Duration // Time to wait before pull engine removes incoming nonce
+	ResponseWaitTime time.Duration // Time to wait before pull engine ends pull
+
+	DialTimeout  time.Duration // Dial timeout
+	ConnTimeout  time.Duration // Connection timeout
+	RecvBuffSize int           // Buffer size of received messages
+	SendBuffSize int           // Buffer size of sending messages
+
+	MsgExpirationTimeout time.Duration // Leadership message expiration timeout
+
+	AliveTimeInterval            time.Duration // Alive check interval
+	AliveExpirationTimeout       time.Duration // Alive expiration timeout
+	AliveExpirationCheckInterval time.Duration // Alive expiration check interval
+	ReconnectInterval            time.Duration // Reconnect interval
+
 }

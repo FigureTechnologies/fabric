@@ -8,10 +8,12 @@ package consensus
 
 import (
 	"github.com/hyperledger/fabric/common/channelconfig"
-	"github.com/hyperledger/fabric/common/crypto"
+	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
+	"github.com/hyperledger/fabric/orderer/consensus/migration"
 	cb "github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protoutil"
 )
 
 // Consenter defines the backing ordering mechanism.
@@ -65,24 +67,30 @@ type Chain interface {
 
 	// Halt frees the resources which were allocated for this Chain.
 	Halt()
+
+	// Status provides access to the consensus-type migration status of the underlying chain.
+	MigrationStatus() migration.Status
 }
 
 //go:generate counterfeiter -o mocks/mock_consenter_support.go . ConsenterSupport
 
 // ConsenterSupport provides the resources available to a Consenter implementation.
 type ConsenterSupport interface {
-	crypto.LocalSigner
+	identity.SignerSerializer
 	msgprocessor.Processor
 
 	// VerifyBlockSignature verifies a signature of a block with a given optional
 	// configuration (can be nil).
-	VerifyBlockSignature([]*cb.SignedData, *cb.ConfigEnvelope) error
+	VerifyBlockSignature([]*protoutil.SignedData, *cb.ConfigEnvelope) error
 
 	// BlockCutter returns the block cutting helper for this channel.
 	BlockCutter() blockcutter.Receiver
 
 	// SharedConfig provides the shared config from the channel's current config block.
 	SharedConfig() channelconfig.Orderer
+
+	// ChannelConfig provides the channel config from the channel's current config block.
+	ChannelConfig() channelconfig.Channel
 
 	// CreateNextBlock takes a list of messages and creates the next block based on the block with highest block number committed to the ledger
 	// Note that either WriteBlock or WriteConfigBlock must be called before invoking this method a second time.
@@ -106,4 +114,12 @@ type ConsenterSupport interface {
 
 	// Height returns the number of blocks in the chain this channel is associated with.
 	Height() uint64
+
+	// IsSystemChannel returns true if this is the system channel.
+	// The chain needs to know if it is system or standard for consensus-type migration.
+	IsSystemChannel() bool
+
+	// Append appends a new block to the ledger in its raw form,
+	// unlike WriteBlock that also mutates its metadata.
+	Append(block *cb.Block) error
 }

@@ -26,7 +26,7 @@ var sysccLogger = flogging.MustGetLogger("sccapi")
 // Registrar provides a way for system chaincodes to be registered
 type Registrar interface {
 	// Register registers a system chaincode
-	Register(ccid *ccintf.CCID, cc shim.Chaincode) error
+	Register(ccid ccintf.CCID, cc shim.Chaincode) error
 }
 
 // SystemChaincode defines the metadata needed to initialize system chaincode
@@ -112,10 +112,7 @@ func (p *Provider) registerSysCC(syscc SelfDescribingSysCC) (bool, error) {
 	// XXX This is an ugly hack, version should be tied to the chaincode instance, not he peer binary
 	version := util.GetSysCCVersion()
 
-	ccid := &ccintf.CCID{
-		Name:    syscc.Name(),
-		Version: version,
-	}
+	ccid := ccintf.CCID(syscc.Name() + ":" + version)
 	err := p.Registrar.Register(ccid, syscc.Chaincode())
 	if err != nil {
 		//if the type is registered, the instance may not be... keep going

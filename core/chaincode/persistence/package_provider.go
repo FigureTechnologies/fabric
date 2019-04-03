@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 
 	"github.com/hyperledger/fabric/common/chaincode"
+	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/pkg/errors"
 )
@@ -19,8 +20,7 @@ import (
 type StorePackageProvider interface {
 	GetChaincodeInstallPath() string
 	ListInstalledChaincodes() ([]chaincode.InstalledChaincode, error)
-	Load(hash []byte) (codePackage []byte, name, version string, err error)
-	RetrieveHash(name, version string) (hash []byte, err error)
+	Load(packageID persistence.PackageID) ([]byte, error)
 }
 
 // LegacyPackageProvider is the interface needed to retrieve
@@ -47,8 +47,8 @@ type PackageProvider struct {
 // the name and version. It first searches through the persisted
 // ChaincodeInstallPackages and then falls back to searching for
 // ChaincodeDeploymentSpecs
-func (p *PackageProvider) GetChaincodeCodePackage(name, version string) ([]byte, error) {
-	codePackage, err := p.getCodePackageFromStore(name, version)
+func (p *PackageProvider) GetChaincodeCodePackage(ccci *ccprovider.ChaincodeContainerInfo) ([]byte, error) {
+	codePackage, err := p.getCodePackageFromStore(ccci.PackageID)
 	if err == nil {
 		return codePackage, nil
 	}
@@ -58,10 +58,10 @@ func (p *PackageProvider) GetChaincodeCodePackage(name, version string) ([]byte,
 		return nil, err
 	}
 
-	codePackage, err = p.getCodePackageFromLegacyPP(name, version)
+	codePackage, err = p.getCodePackageFromLegacyPP(ccci.Name, ccci.Version)
 	if err != nil {
 		logger.Debug(err.Error())
-		err = errors.Errorf("code package not found for chaincode with name '%s', version '%s'", name, version)
+		err = errors.Errorf("code package not found for chaincode with name '%s', version '%s'", ccci.Name, ccci.Version)
 		return nil, err
 	}
 	return codePackage, nil
@@ -69,16 +69,11 @@ func (p *PackageProvider) GetChaincodeCodePackage(name, version string) ([]byte,
 
 // GetCodePackageFromStore gets the code package bytes from the package
 // provider's Store, which persists ChaincodeInstallPackages
-func (p *PackageProvider) getCodePackageFromStore(name, version string) ([]byte, error) {
-	hash, err := p.Store.RetrieveHash(name, version)
+func (p *PackageProvider) getCodePackageFromStore(packageID persistence.PackageID) ([]byte, error) {
+	fsBytes, err := p.Store.Load(packageID)
 	if _, ok := err.(*CodePackageNotFoundErr); ok {
 		return nil, err
 	}
-	if err != nil {
-		return nil, errors.WithMessage(err, "error retrieving hash")
-	}
-
-	fsBytes, _, _, err := p.Store.Load(hash)
 	if err != nil {
 		return nil, errors.WithMessage(err, "error loading code package from ChaincodeInstallPackage")
 	}

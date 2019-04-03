@@ -22,6 +22,14 @@ Organizations:
         # Name can include alphanumeric characters as well as dots and dashes.
         Name: SampleOrg
 
+        # SkipAsForeign can be set to true for org definitions which are to be
+        # inherited from the orderer system channel during channel creation.  This
+        # is especially useful when an admin of a single org without access to the
+        # MSP directories of the other orgs wishes to create a channel.  Note
+        # this property must always be set to false for orgs included in block
+        # creation.
+        SkipAsForeign: false
+
         # ID is the key by which this org's MSP definition will be referenced.
         # ID can include alphanumeric characters as well as dots and dashes.
         ID: SampleOrg
@@ -48,6 +56,9 @@ Organizations:
             Admins:
                 Type: Signature
                 Rule: "OR('SampleOrg.admin')"
+            Endorsement:
+                Type: Signature
+                Rule: "OR('SampleOrg.member')"
 
         # AnchorPeers defines the location of peers which can be used for
         # cross-org gossip communication. Note, this value is only encoded in
@@ -134,6 +145,17 @@ Application: &ApplicationDefaults
         # User's can override these defaults with their own policy mapping by defining the
         # mapping under ACLs in their channel definition
 
+        #---New Lifecycle System Chaincode (_lifecycle) function to policy mapping for access control--#
+
+        # ACL policy for _lifecycle's "CommitChaincodeDefinition" function
+        _lifecycle/CommitChaincodeDefinition: /Channel/Application/Writers
+
+        # ACL policy for _lifecycle's "QueryChaincodeDefinition" function
+        _lifecycle/QueryChaincodeDefinition: /Channel/Application/Readers
+
+        # ACL policy for _lifecycle's "QueryNamespaceDefinitions" function
+        _lifecycle/QueryNamespaceDefinitions: /Channel/Application/Readers
+
         #---Lifecycle System Chaincode (lscc) function to policy mapping for access control---#
 
         # ACL policy for lscc's "getid" function
@@ -200,6 +222,12 @@ Application: &ApplicationDefaults
     # For Application policies, their canonical path is
     #   /Channel/Application/<PolicyName>
     Policies: &ApplicationDefaultPolicies
+        LifecycleEndorsement:
+            Type: ImplicitMeta
+            Rule: "MAJORITY Endorsement"
+        Endorsement:
+            Type: ImplicitMeta
+            Rule: "MAJORITY Endorsement"
         Readers:
             Type: ImplicitMeta
             Rule: "ANY Readers"
@@ -250,7 +278,7 @@ Orderer: &OrdererDefaults
 
         # Max Message Count: The maximum number of messages to permit in a
         # batch.  No block will contain more than this number of messages.
-        MaxMessageCount: 10
+        MaxMessageCount: 500
 
         # Absolute Max Bytes: The absolute maximum number of bytes allowed for
         # the serialized messages in a batch. The maximum block size is this value
@@ -272,7 +300,7 @@ Orderer: &OrdererDefaults
         # will contain only that message.  Because messages may be larger than
         # preferred max bytes (up to AbsoluteMaxBytes), some batches may exceed
         # the preferred max bytes, but will always contain exactly one transaction.
-        PreferredMaxBytes: 512 KB
+        PreferredMaxBytes: 2 MB
 
     # Max Channels is the maximum number of channels to allow on the ordering
     # network. When set to 0, this implies no maximum number of channels.
@@ -286,6 +314,53 @@ Orderer: &OrdererDefaults
             - kafka0:9092
             - kafka1:9092
             - kafka2:9092
+
+    # EtcdRaft defines configuration which must be set when the "etcdraft"
+    # orderertype is chosen.
+    EtcdRaft:
+        # The set of Raft replicas for this network. For the etcd/raft-based
+        # implementation, we expect every replica to also be an OSN. Therefore,
+        # a subset of the host:port items enumerated in this list should be
+        # replicated under the Orderer.Addresses key above.
+        Consenters:
+            - Host: raft0.example.com
+              Port: 7050
+              ClientTLSCert: path/to/ClientTLSCert0
+              ServerTLSCert: path/to/ServerTLSCert0
+            - Host: raft1.example.com
+              Port: 7050
+              ClientTLSCert: path/to/ClientTLSCert1
+              ServerTLSCert: path/to/ServerTLSCert1
+            - Host: raft2.example.com
+              Port: 7050
+              ClientTLSCert: path/to/ClientTLSCert2
+              ServerTLSCert: path/to/ServerTLSCert2
+
+        # Options to be specified for all the etcd/raft nodes. The values here
+        # are the defaults for all new channels and can be modified on a
+        # per-channel basis via configuration updates.
+        Options:
+            # TickInterval is the time interval between two Node.Tick invocations.
+            TickInterval: 500ms
+
+            # ElectionTick is the number of Node.Tick invocations that must pass
+            # between elections. That is, if a follower does not receive any
+            # message from the leader of current term before ElectionTick has
+            # elapsed, it will become candidate and start an election.
+            # ElectionTick must be greater than HeartbeatTick.
+            ElectionTick: 10
+
+            # HeartbeatTick is the number of Node.Tick invocations that must
+            # pass between heartbeats. That is, a leader sends heartbeat
+            # messages to maintain its leadership every HeartbeatTick ticks.
+            HeartbeatTick: 1
+
+            # MaxInflightBlocks limits the max number of in-flight append messages
+            # during optimistic replication phase.
+            MaxInflightBlocks: 5
+
+            # SnapshotIntervalSize defines number of bytes per which a snapshot is taken
+            SnapshotIntervalSize: 20 MB
 
     # Organizations lists the orgs participating on the orderer side of the
     # network.
@@ -487,8 +562,42 @@ Profiles:
     # profiles, only the 'Application' section and consortium # name are
     # considered.
     SampleSingleMSPChannel:
+        <<: *ChannelDefaults
         Consortium: SampleConsortium
         Application:
             <<: *ApplicationDefaults
             Organizations:
-                - *SampleOrg
+                - <<: *SampleOrg
+
+    # SampleDevModeEtcdRaft defines a configuration that differs from the
+    # SampleDevModeSolo one only in that it uses the etcd/raft-based orderer.
+    SampleDevModeEtcdRaft:
+        <<: *ChannelDefaults
+        Orderer:
+            <<: *OrdererDefaults
+            OrdererType: etcdraft
+            Organizations:
+                - <<: *SampleOrg
+                  Policies:
+                      <<: *SampleOrgPolicies
+                      Admins:
+                          Type: Signature
+                          Rule: "OR('SampleOrg.member')"
+        Application:
+            <<: *ApplicationDefaults
+            Organizations:
+                - <<: *SampleOrg
+                  Policies:
+                      <<: *SampleOrgPolicies
+                      Admins:
+                          Type: Signature
+                          Rule: "OR('SampleOrg.member')"
+        Consortiums:
+            SampleConsortium:
+                Organizations:
+                    - <<: *SampleOrg
+                      Policies:
+                          <<: *SampleOrgPolicies
+                          Admins:
+                              Type: Signature
+                              Rule: "OR('SampleOrg.member')"

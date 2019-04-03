@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/java"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/core/container/util"
@@ -24,8 +23,6 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
-
-var _ = platforms.Platform(&java.Platform{})
 
 const chaincodePathFolder = "testdata"
 const chaincodePathFolderGradle = chaincodePathFolder + "/gradle"
@@ -140,7 +137,7 @@ func TestGenerateDockerfile(t *testing.T) {
 	platform := java.Platform{}
 
 	spec.ChaincodeId.Path = chaincodePathFolderGradle
-	_, err := platform.GetDeploymentPayload(spec.Path())
+	_, err := platform.GetDeploymentPayload(spec.ChaincodeId.Path)
 	if err != nil {
 		t.Fatalf("failed to get Java CC payload: %s", err)
 	}
@@ -166,7 +163,7 @@ func TestGenerateDockerBuild(t *testing.T) {
 		ChaincodeId: &pb.ChaincodeID{Path: chaincodePathFolderGradle},
 		Input:       &pb.ChaincodeInput{Args: [][]byte{[]byte("init")}}}
 
-	cp, _ := platform.GetDeploymentPayload(ccSpec.Path())
+	cp, _ := platform.GetDeploymentPayload(ccSpec.ChaincodeId.Path)
 
 	cds := &pb.ChaincodeDeploymentSpec{
 		ChaincodeSpec: ccSpec,
@@ -176,7 +173,7 @@ func TestGenerateDockerBuild(t *testing.T) {
 	gw := gzip.NewWriter(payload)
 	tw := tar.NewWriter(gw)
 
-	err := platform.GenerateDockerBuild(cds.Path(), cds.Bytes(), tw)
+	err := platform.GenerateDockerBuild(cds.ChaincodeSpec.ChaincodeId.Path, cds.CodePackage, tw)
 	assert.NoError(t, err)
 }
 

@@ -109,7 +109,7 @@ func TestLSCCListener(t *testing.T) {
 				{Name: cc1Def.Name},
 			}, nil
 		}
-	mockInfoProvider.ChaincodeInfoStub = func(chaincodeName string, qe ledger.SimpleQueryExecutor) (*ledger.DeployedChaincodeInfo, error) {
+	mockInfoProvider.ChaincodeInfoStub = func(channelName, chaincodeName string, qe ledger.SimpleQueryExecutor) (*ledger.DeployedChaincodeInfo, error) {
 		return &ledger.DeployedChaincodeInfo{
 			Name:    chaincodeName,
 			Hash:    cc1Def.Hash,
@@ -183,11 +183,6 @@ func (p *mockProvider) setChaincodeDeployed(chainid string, chaincodeDefinition 
 
 func (p *mockProvider) setChaincodeInstalled(chaincodeDefinition *ChaincodeDefinition, dbArtifactsTar []byte) {
 	p.chaincodesInstalled[[2]string{chaincodeDefinition.Name, chaincodeDefinition.Version}] = dbArtifactsTar
-}
-
-func (p *mockProvider) setChaincodeDeployAndInstalled(chainid string, chaincodeDefinition *ChaincodeDefinition, dbArtifactsTar []byte) {
-	p.setChaincodeDeployed(chainid, chaincodeDefinition)
-	p.setChaincodeInstalled(chaincodeDefinition, dbArtifactsTar)
 }
 
 func (p *mockProvider) GetDeployedChaincodeInfo(chainid string, chaincodeDefinition *ChaincodeDefinition) (*ledger.DeployedChaincodeInfo, error) {

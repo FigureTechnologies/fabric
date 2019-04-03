@@ -16,8 +16,8 @@ type lockBasedQueryExecutor struct {
 	txid   string
 }
 
-func newQueryExecutor(txmgr *LockBasedTxMgr, txid string) *lockBasedQueryExecutor {
-	helper := newQueryHelper(txmgr, nil)
+func newQueryExecutor(txmgr *LockBasedTxMgr, txid string, performCollCheck bool) *lockBasedQueryExecutor {
+	helper := newQueryHelper(txmgr, nil, performCollCheck)
 	logger.Debugf("constructing new query executor txid = [%s]", txid)
 	return &lockBasedQueryExecutor{helper, txid}
 }
@@ -68,6 +68,11 @@ func (q *lockBasedQueryExecutor) ExecuteQueryWithMetadata(namespace, query strin
 // GetPrivateData implements method in interface `ledger.QueryExecutor`
 func (q *lockBasedQueryExecutor) GetPrivateData(namespace, collection, key string) ([]byte, error) {
 	return q.helper.getPrivateData(namespace, collection, key)
+}
+
+func (q *lockBasedQueryExecutor) GetPrivateDataHash(namespace, collection, key string) ([]byte, error) {
+	valueHash, _, err := q.helper.getPrivateDataValueHash(namespace, collection, key)
+	return valueHash, err
 }
 
 // GetPrivateDataMetadata implements method in interface `ledger.QueryExecutor`

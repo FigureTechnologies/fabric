@@ -18,13 +18,21 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/deliverservice/blocksprovider"
+	"github.com/hyperledger/fabric/core/deliverservice/mocks"
+	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/orderer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+//go:generate counterfeiter -o mocks/signer_serializer.go --fake-name SignerSerializer . signerSerializer
+
+type signerSerializer interface {
+	identity.SignerSerializer
+}
 
 func TestTLSBinding(t *testing.T) {
 	defer ensureNoGoroutineLeak(t)()
@@ -32,6 +40,7 @@ func TestTLSBinding(t *testing.T) {
 	requester := blocksRequester{
 		tls:     true,
 		chainID: "testchainid",
+		signer:  &mocks.SignerSerializer{},
 	}
 
 	// Create an AtomicBroadcastServer
@@ -135,7 +144,7 @@ func (o *mockOrderer) Deliver(stream orderer.AtomicBroadcast_DeliverServer) erro
 		if !isEnvelope || env == nil {
 			assert.Fail(o.t, "not an envelope")
 		}
-		ch, err := utils.ChannelHeader(env)
+		ch, err := protoutil.ChannelHeader(env)
 		assert.NoError(o.t, err)
 		return ch.TlsCertHash
 	})

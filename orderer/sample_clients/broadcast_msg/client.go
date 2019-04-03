@@ -10,30 +10,29 @@ import (
 	"os"
 	"sync"
 
-	"github.com/hyperledger/fabric/common/crypto"
-	"github.com/hyperledger/fabric/common/localmsp"
+	"github.com/hyperledger/fabric/internal/pkg/identity"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/grpc"
-	"gopkg.in/cheggaaa/pb.v1"
+	pb "gopkg.in/cheggaaa/pb.v1"
 )
 
 type broadcastClient struct {
 	client    ab.AtomicBroadcast_BroadcastClient
-	signer    crypto.LocalSigner
+	signer    identity.SignerSerializer
 	channelID string
 }
 
 // newBroadcastClient creates a simple instance of the broadcastClient interface
-func newBroadcastClient(client ab.AtomicBroadcast_BroadcastClient, channelID string, signer crypto.LocalSigner) *broadcastClient {
+func newBroadcastClient(client ab.AtomicBroadcast_BroadcastClient, channelID string, signer identity.SignerSerializer) *broadcastClient {
 	return &broadcastClient{client: client, channelID: channelID, signer: signer}
 }
 
 func (s *broadcastClient) broadcast(transaction []byte) error {
-	env, err := utils.CreateSignedEnvelope(cb.HeaderType_MESSAGE, s.channelID, s.signer, &cb.ConfigValue{Value: transaction}, 0, 0)
+	env, err := protoutil.CreateSignedEnvelope(cb.HeaderType_MESSAGE, s.channelID, s.signer, &cb.ConfigValue{Value: transaction}, 0, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -65,7 +64,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	signer := localmsp.NewSigner()
+	signer, err := mspmgmt.GetLocalMSP().GetDefaultSigningIdentity()
+	if err != nil {
+		fmt.Println("Failed to load local signing identity:", err)
+		os.Exit(0)
+	}
 
 	var channelID string
 	var serverAddr string

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package kafka
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -14,12 +15,17 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/golang/protobuf/proto"
-	localconfig "github.com/hyperledger/fabric/orderer/common/localconfig"
+	"github.com/hyperledger/fabric/common/channelconfig"
+	"github.com/hyperledger/fabric/common/configtx"
+	"github.com/hyperledger/fabric/orderer/common/bootstrap/file"
+	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
 	"github.com/hyperledger/fabric/orderer/consensus"
+	"github.com/hyperledger/fabric/orderer/consensus/migration"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
+	"github.com/pkg/errors"
 )
 
 // Used for capturing metrics -- see processMessagesToBlocks
@@ -45,7 +51,7 @@ func newChain(
 	lastResubmittedConfigOffset int64,
 ) (*chainImpl, error) {
 	lastCutBlockNumber := getLastCutBlockNumber(support.Height())
-	logger.Infof("[channel: %s] Starting chain with last persisted offset %d and last recorded block %d",
+	logger.Infof("[channel: %s] Starting chain with last persisted offset %d and last recorded block [%d]",
 		support.ChainID(), lastOffsetPersisted, lastCutBlockNumber)
 
 	doneReprocessingMsgInFlight := make(chan struct{})
@@ -73,7 +79,16 @@ func newChain(
 		haltChan:                    make(chan struct{}),
 		startChan:                   make(chan struct{}),
 		doneReprocessingMsgInFlight: doneReprocessingMsgInFlight,
+		migrationManager:            migration.NewManager(support.IsSystemChannel(), support.ChainID()),
 	}, nil
+}
+
+//go:generate counterfeiter -o mock/sync_producer.go --fake-name SyncProducer . syncProducer
+
+type syncProducer interface {
+	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
+	SendMessages(msgs []*sarama.ProducerMessage) error
+	Close() error
 }
 
 type chainImpl struct {
@@ -86,7 +101,7 @@ type chainImpl struct {
 	lastResubmittedConfigOffset int64
 	lastCutBlockNumber          uint64
 
-	producer        sarama.SyncProducer
+	producer        syncProducer
 	parentConsumer  sarama.Consumer
 	channelConsumer sarama.PartitionConsumer
 
@@ -108,6 +123,17 @@ type chainImpl struct {
 	startChan chan struct{}
 	// timer controls the batch timeout of cutting pending messages into block
 	timer <-chan time.Time
+
+	replicaIDs []int32
+
+	// provides access to the consensus-type migration status of the chain,
+	// and allows stepping through the state machine.
+	migrationManager migration.Manager
+}
+
+// MigrationStatus provides access to the consensus-type migration status of the chain.
+func (chain *chainImpl) MigrationStatus() migration.Status {
+	return chain.migrationManager
 }
 
 // Errored returns a channel which will close when a partition consumer error
@@ -200,12 +226,18 @@ func (chain *chainImpl) Order(env *cb.Envelope, configSeq uint64) error {
 }
 
 func (chain *chainImpl) order(env *cb.Envelope, configSeq uint64, originalOffset int64) error {
-	marshaledEnv, err := utils.Marshal(env)
+	// During consensus-type migration: stop all normal txs on the system-channel and standard-channels. This
+	// happens in the broadcast-phase, and will prevent new transactions from entering Kafka.
+	if chain.migrationManager.IsPending() || chain.migrationManager.IsCommitted() {
+		return fmt.Errorf("cannot enqueue, consensus-type migration pending")
+	}
+
+	marshaledEnv, err := protoutil.Marshal(env)
 	if err != nil {
-		return fmt.Errorf("cannot enqueue, unable to marshal envelope because = %s", err)
+		return errors.Errorf("cannot enqueue, unable to marshal envelope: %s", err)
 	}
 	if !chain.enqueue(newNormalMessage(marshaledEnv, configSeq, originalOffset)) {
-		return fmt.Errorf("cannot enqueue")
+		return errors.Errorf("cannot enqueue")
 	}
 	return nil
 }
@@ -216,7 +248,11 @@ func (chain *chainImpl) Configure(config *cb.Envelope, configSeq uint64) error {
 }
 
 func (chain *chainImpl) configure(config *cb.Envelope, configSeq uint64, originalOffset int64) error {
-	marshaledConfig, err := utils.Marshal(config)
+	if err := chain.filterMigration(config); err != nil {
+		return errors.Wrap(err, "cannot enqueue")
+	}
+
+	marshaledConfig, err := protoutil.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("cannot enqueue, unable to marshal config because %s", err)
 	}
@@ -226,7 +262,58 @@ func (chain *chainImpl) configure(config *cb.Envelope, configSeq uint64, origina
 	return nil
 }
 
-// enqueue accepts a message and returns true on acceptance, or false otheriwse.
+// filterMigration filters out config transactions that should be rejected during consensus-type migration.
+// Filtering takes into account the global state of migration, not just the state of the current channel.
+func (chain *chainImpl) filterMigration(config *cb.Envelope) error {
+	migEnabled := chain.ChannelConfig().Capabilities().ConsensusTypeMigration() && chain.SharedConfig().Capabilities().Kafka2RaftMigration()
+	isOrdTx, isOrdConf, ordConf := chain.getOrdererConfig(config)
+
+	if chain.ConsenterSupport.IsSystemChannel() && isOrdTx {
+		if migEnabled && chain.migrationManager.IsStartedOrCommitted() {
+			return errors.Errorf("consensus-type migration pending: ORDERER_TX on system channel, blocking channel creation")
+		} else {
+			return nil
+		}
+	}
+
+	if !isOrdConf {
+		return nil
+	}
+
+	if !migEnabled {
+		if chain.SharedConfig().ConsensusType() != ordConf.ConsensusType() {
+			return errors.Errorf("attempted to change consensus type from %s to %s",
+				chain.SharedConfig().ConsensusType(), ordConf.ConsensusType())
+		}
+		if ordConf.ConsensusMigrationState() != ab.ConsensusType_MIG_STATE_NONE || ordConf.ConsensusMigrationContext() != 0 {
+			return errors.Errorf("new config has unexpected consensus-migration state or context: (%s/%d) should be (MIG_STATE_NONE/0)",
+				ordConf.ConsensusMigrationState(), ordConf.ConsensusMigrationContext())
+		}
+
+		return nil
+	}
+
+	currentInfo := &migration.ConsensusTypeInfo{
+		Type:    chain.SharedConfig().ConsensusType(),
+		State:   chain.SharedConfig().ConsensusMigrationState(),
+		Context: chain.SharedConfig().ConsensusMigrationContext(),
+	}
+
+	nextInfo := &migration.ConsensusTypeInfo{
+		Type:     ordConf.ConsensusType(),
+		Metadata: ordConf.ConsensusMetadata(),
+		State:    ordConf.ConsensusMigrationState(),
+		Context:  ordConf.ConsensusMigrationContext(),
+	}
+
+	if valErr := chain.migrationManager.Validate(currentInfo, nextInfo); valErr != nil {
+		return valErr
+	}
+
+	return chain.migrationManager.CheckAllowed(nextInfo, chain.consenter.migrationController())
+}
+
+// enqueue accepts a message and returns true on acceptance, or false otherwise.
 func (chain *chainImpl) enqueue(kafkaMsg *ab.KafkaMessage) bool {
 	logger.Debugf("[channel: %s] Enqueueing envelope...", chain.ChainID())
 	select {
@@ -236,7 +323,7 @@ func (chain *chainImpl) enqueue(kafkaMsg *ab.KafkaMessage) bool {
 			logger.Warningf("[channel: %s] consenter for this channel has been halted", chain.ChainID())
 			return false
 		default: // The post path
-			payload, err := utils.Marshal(kafkaMsg)
+			payload, err := protoutil.Marshal(kafkaMsg)
 			if err != nil {
 				logger.Errorf("[channel: %s] unable to marshal Kafka message because = %s", chain.ChainID(), err)
 				return false
@@ -253,6 +340,23 @@ func (chain *chainImpl) enqueue(kafkaMsg *ab.KafkaMessage) bool {
 		logger.Warningf("[channel: %s] Will not enqueue, consenter for this channel hasn't started yet", chain.ChainID())
 		return false
 	}
+}
+
+func (chain *chainImpl) HealthCheck(ctx context.Context) error {
+	var err error
+
+	payload := protoutil.MarshalOrPanic(newConnectMessage())
+	message := newProducerMessage(chain.channel, payload)
+
+	_, _, err = chain.producer.SendMessage(message)
+	if err != nil {
+		logger.Warnf("[channel %s] Cannot post CONNECT message = %s", chain.channel.topic(), err)
+		if err == sarama.ErrNotEnoughReplicas {
+			errMsg := fmt.Sprintf("[replica ids: %d]", chain.replicaIDs)
+			return errors.WithMessage(err, errMsg)
+		}
+	}
+	return nil
 }
 
 // Called by Start().
@@ -292,6 +396,11 @@ func startThread(chain *chainImpl) {
 		logger.Panicf("[channel: %s] Cannot set up channel consumer = %s", chain.channel.topic(), err)
 	}
 	logger.Infof("[channel: %s] Channel consumer set up successfully", chain.channel.topic())
+
+	chain.replicaIDs, err = getHealthyClusterReplicaInfo(chain.consenter.retryOptions(), chain.haltChan, chain.SharedConfig().KafkaBrokers(), chain.channel)
+	if err != nil {
+		logger.Panicf("[channel: %s] failed to get replica IDs = %s", chain.channel.topic(), err)
+	}
 
 	chain.doneProcessingMessagesToBlocks = make(chan struct{})
 
@@ -619,14 +728,14 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 
 		// Commit the first block
 		block := chain.CreateNextBlock(batches[0])
-		metadata := utils.MarshalOrPanic(&ab.KafkaMetadata{
+		metadata := protoutil.MarshalOrPanic(&ab.KafkaMetadata{
 			LastOffsetPersisted:         offset,
 			LastOriginalOffsetProcessed: chain.lastOriginalOffsetProcessed,
 			LastResubmittedConfigOffset: chain.lastResubmittedConfigOffset,
 		})
 		chain.WriteBlock(block, metadata)
 		chain.lastCutBlockNumber++
-		logger.Debugf("[channel: %s] Batch filled, just cut block %d - last persisted offset is now %d", chain.ChainID(), chain.lastCutBlockNumber, offset)
+		logger.Debugf("[channel: %s] Batch filled, just cut block [%d] - last persisted offset is now %d", chain.ChainID(), chain.lastCutBlockNumber, offset)
 
 		// Commit the second block if exists
 		if len(batches) == 2 {
@@ -634,14 +743,14 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 			offset++
 
 			block := chain.CreateNextBlock(batches[1])
-			metadata := utils.MarshalOrPanic(&ab.KafkaMetadata{
+			metadata := protoutil.MarshalOrPanic(&ab.KafkaMetadata{
 				LastOffsetPersisted:         offset,
 				LastOriginalOffsetProcessed: newOffset,
 				LastResubmittedConfigOffset: chain.lastResubmittedConfigOffset,
 			})
 			chain.WriteBlock(block, metadata)
 			chain.lastCutBlockNumber++
-			logger.Debugf("[channel: %s] Batch filled, just cut block %d - last persisted offset is now %d", chain.ChainID(), chain.lastCutBlockNumber, offset)
+			logger.Debugf("[channel: %s] Batch filled, just cut block [%d] - last persisted offset is now %d", chain.ChainID(), chain.lastCutBlockNumber, offset)
 		}
 	}
 
@@ -659,7 +768,7 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 		if batch != nil {
 			logger.Debugf("[channel: %s] Cut pending messages into block", chain.ChainID())
 			block := chain.CreateNextBlock(batch)
-			metadata := utils.MarshalOrPanic(&ab.KafkaMetadata{
+			metadata := protoutil.MarshalOrPanic(&ab.KafkaMetadata{
 				LastOffsetPersisted:         receivedOffset - 1,
 				LastOriginalOffsetProcessed: chain.lastOriginalOffsetProcessed,
 				LastResubmittedConfigOffset: chain.lastResubmittedConfigOffset,
@@ -671,7 +780,7 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 		logger.Debugf("[channel: %s] Creating isolated block for config message", chain.ChainID())
 		chain.lastOriginalOffsetProcessed = newOffset
 		block := chain.CreateNextBlock([]*cb.Envelope{message})
-		metadata := utils.MarshalOrPanic(&ab.KafkaMetadata{
+		metadata := protoutil.MarshalOrPanic(&ab.KafkaMetadata{
 			LastOffsetPersisted:         receivedOffset,
 			LastOriginalOffsetProcessed: chain.lastOriginalOffsetProcessed,
 			LastResubmittedConfigOffset: chain.lastResubmittedConfigOffset,
@@ -702,7 +811,7 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 		// Received regular message of type UNKNOWN or resubmission if off, indicating an OSN network with v1.0.x orderer
 		logger.Warningf("[channel: %s] This orderer is running in compatibility mode", chain.ChainID())
 
-		chdr, err := utils.ChannelHeader(env)
+		chdr, err := protoutil.ChannelHeader(env)
 		if err != nil {
 			return fmt.Errorf("discarding bad config message because of channel header unmarshalling error = %s", err)
 		}
@@ -787,6 +896,11 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 			offset = chain.lastOriginalOffsetProcessed
 		}
 
+		// During consensus-type migration, drop normal messages on the channel.
+		if chain.migrationManager.IsPending() || chain.migrationManager.IsCommitted() {
+			logger.Warningf("[channel: %s] Normal message is dropped, consensus-type migration pending", chain.ChainID())
+			return nil
+		}
 		commitNormalMsg(env, offset)
 
 	case ab.KafkaMessageRegular_CONFIG:
@@ -853,40 +967,140 @@ func (chain *chainImpl) processRegular(regularMessage *ab.KafkaMessageRegular, r
 			offset = chain.lastOriginalOffsetProcessed
 		}
 
-		commitConfigMsg(env, offset)
+		// Evaluate a potential consensus-type migration step
+		doCommit, err := chain.processMigrationStep(env)
+		if err != nil {
+			return errors.Wrapf(err, "error processing config message for possible migration step")
+		}
+
+		if doCommit {
+			commitConfigMsg(env, offset)
+		} else {
+			logger.Warningf("[channel: %s] Dropping config message with offset %d, because of consensus-type migration step", chain.ChainID(), receivedOffset)
+		}
 
 	default:
-		return fmt.Errorf("unsupported regular kafka message type: %v", regularMessage.Class.String())
+		return errors.Errorf("unsupported regular kafka message type: %v", regularMessage.Class.String())
 	}
 
 	return nil
 }
 
+// processMigrationStep evaluates the consensus-type migration state machine,
+// and returns "true" if the config block should be committed by the block-writer.
+// The method returns immediately if the migration capability is disabled.
+// If migration steps into the COMMIT stage, the bootstrap file will be replaced.
+//
+// Illegal transitions triggered by the user are dropped, unexpected states (which indicate a bug) cause panic.
+func (chain *chainImpl) processMigrationStep(configTx *cb.Envelope) (commitBlock bool, err error) {
+
+	if !chain.ConsenterSupport.SharedConfig().Capabilities().Kafka2RaftMigration() {
+		return true, nil
+	}
+
+	payload := protoutil.UnmarshalPayloadOrPanic(configTx.Payload)
+	if payload.Header == nil {
+		logger.Panicf("Consensus-type migration: Told to process a config tx, but configtx payload header is missing")
+	}
+	chdr := protoutil.UnmarshalChannelHeaderOrPanic(payload.Header.ChannelHeader)
+
+	logger.Debugf("[channel: %s] Consensus-type migration: Processing, header: %v", chain.ChainID(), chdr.String())
+
+	switch chdr.Type {
+
+	case int32(cb.HeaderType_ORDERER_TRANSACTION):
+		if chain.migrationManager.IsPending() || chain.migrationManager.IsCommitted() {
+			commitBlock = false
+			logger.Debugf("[channel: %s] Consensus-type migration: Dropping ORDERER_TRANSACTION because consensus-type migration pending; Status: %s",
+				chain.ChainID(), chain.migrationManager)
+		} else {
+			commitBlock = true
+		}
+
+	case int32(cb.HeaderType_CONFIG):
+		configEnvelope, err := configtx.UnmarshalConfigEnvelope(payload.Data)
+		if err != nil {
+			logger.Panicf("Consensus-type migration: Told to process a config tx with new config, but did not have config envelope encoded: %s", err)
+		}
+		config := configEnvelope.Config
+		bundle, err := channelconfig.NewBundle(chain.ChainID(), config)
+		if err != nil {
+			logger.Panicf("Consensus-type migration: Cannot create new bundle from Config: %s", err)
+		}
+
+		ordconf, ok := bundle.OrdererConfig()
+		if !ok {
+			logger.Debugf("[channel: %s]  Consensus-type migration: Config tx does not have OrdererConfig, ignoring", chain.ChainID())
+			return true, nil
+		}
+
+		nextConsensusType := ordconf.ConsensusType()
+		nextMigState := ordconf.ConsensusMigrationState()
+		nextMigContext := ordconf.ConsensusMigrationContext()
+		logger.Infof("[channel: %s] Consensus-type migration: Processing config tx: type: %s, state: %s, context: %d",
+			chain.ChainID(), nextConsensusType, nextMigState.String(), nextMigContext)
+
+		commitMigration := false                                    // Prevent shadowing of commitBlock
+		commitBlock, commitMigration = chain.migrationManager.Step( // Evaluate the migration state machine
+			chain.ChainID(), nextConsensusType, nextMigState, nextMigContext, chain.lastCutBlockNumber, chain.consenter.migrationController())
+		logger.Debugf("[channel: %s] Consensus-type migration: commitBlock=%v, commitMigration=%v", chain.ChainID(), commitBlock, commitMigration)
+
+		if commitMigration {
+			if !(chain.IsSystemChannel() && commitBlock) { // Sanity check, this should never happen
+				logger.Panicf("[channel: %s] Consensus-type migration: commitMigration=true, but: systemChannel=%v, commitBlock=%v (expect: true/true)",
+					chain.ChainID(), chain.IsSystemChannel(), commitBlock)
+			}
+
+			// TODO Validate that the Raft ConsensusType.Metadata is valid, i.e. has what seems to be valid consenters, options, etc.
+			// TODO Consider doing this in the broadcast phase as well to provide better feedback to user.
+
+			// Replace the genesis block file (bootstrap file) with the last config of the system channel.
+			block := chain.CreateNextBlock([]*cb.Envelope{configTx})
+			replacer := file.NewReplacer(chain.consenter.bootstrapFile())
+			if err = replacer.ReplaceGenesisBlockFile(block); err != nil {
+				_, context := chain.migrationManager.StateContext()
+				chain.migrationManager.SetStateContext(ab.ConsensusType_MIG_STATE_START, context) //Undo the commit
+				logger.Warningf("[channel: %s] Consensus-type migration: Reject Config tx on system channel, cannot replace bootstrap file; Status: %s",
+					chain.ChainID(), chain.migrationManager.String())
+				return false, err
+			}
+
+			logger.Infof("[channel: %s] Consensus-type migration: committed; Replaced bootstrap file: %s; Status: %s",
+				chain.ChainID(), chain.consenter.bootstrapFile(), chain.migrationManager.String())
+		}
+
+	default:
+		logger.Panicf("Consensus-type migration: Told to  process a config tx with unknown header type: %v", chdr.Type)
+	}
+
+	return commitBlock, err
+}
+
 func (chain *chainImpl) processTimeToCut(ttcMessage *ab.KafkaMessageTimeToCut, receivedOffset int64) error {
 	ttcNumber := ttcMessage.GetBlockNumber()
-	logger.Debugf("[channel: %s] It's a time-to-cut message for block %d", chain.ChainID(), ttcNumber)
+	logger.Debugf("[channel: %s] It's a time-to-cut message for block [%d]", chain.ChainID(), ttcNumber)
 	if ttcNumber == chain.lastCutBlockNumber+1 {
 		chain.timer = nil
 		logger.Debugf("[channel: %s] Nil'd the timer", chain.ChainID())
 		batch := chain.BlockCutter().Cut()
 		if len(batch) == 0 {
-			return fmt.Errorf("got right time-to-cut message (for block %d),"+
+			return fmt.Errorf("got right time-to-cut message (for block [%d]),"+
 				" no pending requests though; this might indicate a bug", chain.lastCutBlockNumber+1)
 		}
 		block := chain.CreateNextBlock(batch)
-		metadata := utils.MarshalOrPanic(&ab.KafkaMetadata{
+		metadata := protoutil.MarshalOrPanic(&ab.KafkaMetadata{
 			LastOffsetPersisted:         receivedOffset,
 			LastOriginalOffsetProcessed: chain.lastOriginalOffsetProcessed,
 		})
 		chain.WriteBlock(block, metadata)
 		chain.lastCutBlockNumber++
-		logger.Debugf("[channel: %s] Proper time-to-cut received, just cut block %d", chain.ChainID(), chain.lastCutBlockNumber)
+		logger.Debugf("[channel: %s] Proper time-to-cut received, just cut block [%d]", chain.ChainID(), chain.lastCutBlockNumber)
 		return nil
 	} else if ttcNumber > chain.lastCutBlockNumber+1 {
 		return fmt.Errorf("got larger time-to-cut message (%d) than allowed/expected (%d)"+
 			" - this might indicate a bug", ttcNumber, chain.lastCutBlockNumber+1)
 	}
-	logger.Debugf("[channel: %s] Ignoring stale time-to-cut-message for block %d", chain.ChainID(), ttcNumber)
+	logger.Debugf("[channel: %s] Ignoring stale time-to-cut-message for block [%d]", chain.ChainID(), ttcNumber)
 	return nil
 }
 
@@ -896,7 +1110,7 @@ func (chain *chainImpl) processTimeToCut(ttcMessage *ab.KafkaMessageTimeToCut, r
 func sendConnectMessage(retryOptions localconfig.Retry, exitChan chan struct{}, producer sarama.SyncProducer, channel channel) error {
 	logger.Infof("[channel: %s] About to post the CONNECT message...", channel.topic())
 
-	payload := utils.MarshalOrPanic(newConnectMessage())
+	payload := protoutil.MarshalOrPanic(newConnectMessage())
 	message := newProducerMessage(channel, payload)
 
 	retryMsg := "Attempting to post the CONNECT message..."
@@ -915,9 +1129,9 @@ func sendConnectMessage(retryOptions localconfig.Retry, exitChan chan struct{}, 
 }
 
 func sendTimeToCut(producer sarama.SyncProducer, channel channel, timeToCutBlockNumber uint64, timer *<-chan time.Time) error {
-	logger.Debugf("[channel: %s] Time-to-cut block %d timer expired", channel.topic(), timeToCutBlockNumber)
+	logger.Debugf("[channel: %s] Time-to-cut block [%d] timer expired", channel.topic(), timeToCutBlockNumber)
 	*timer = nil
-	payload := utils.MarshalOrPanic(newTimeToCutMessage(timeToCutBlockNumber))
+	payload := protoutil.MarshalOrPanic(newTimeToCutMessage(timeToCutBlockNumber))
 	message := newProducerMessage(channel, payload)
 	_, _, err := producer.SendMessage(message)
 	return err
@@ -1103,4 +1317,82 @@ func setupTopicForChannel(retryOptions localconfig.Retry, haltChan chan struct{}
 		})
 
 	return setupTopic.retry()
+}
+
+// Replica ID information can accurately be retrieved only when the cluster
+// is healthy. Otherwise, the replica request does not return the full set
+// of initial replicas. This information is needed to provide context when
+// a health check returns an error.
+func getHealthyClusterReplicaInfo(retryOptions localconfig.Retry, haltChan chan struct{}, brokers []string, channel channel) ([]int32, error) {
+	var replicaIDs []int32
+
+	retryMsg := "Getting list of Kafka brokers replicating the channel"
+	getReplicaInfo := newRetryProcess(retryOptions, haltChan, channel, retryMsg, func() error {
+		client, err := sarama.NewClient(brokers, nil)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+
+		replicaIDs, err = client.Replicas(channel.topic(), channel.partition())
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	return replicaIDs, getReplicaInfo.retry()
+}
+
+// getOrdererConfig parses the incoming config envelope, classifies it, and returns the  OrdererConfig if it exists.
+//
+// isOrdererTx is true if the config envelope is holding an ORDERER_TRANSACTION.
+// isOrdConf is true if the config envelope is holding a CONFIG, and the OrdererConfig exists.
+// ordConf carries the OrdererConfig, if it exists.
+func (chain *chainImpl) getOrdererConfig(configTx *cb.Envelope) (
+	isOrdererTx bool, isOrdConf bool, ordConf channelconfig.Orderer) {
+	payload, err := protoutil.UnmarshalPayload(configTx.Payload)
+	if err != nil {
+		logger.Errorf("Consensus-type migration: Told to process a config tx, but configtx payload is invalid: %s", err)
+		return false, false, nil
+	}
+
+	if payload.Header == nil {
+		logger.Errorf("Consensus-type migration: Told to process a config tx, but configtx payload header is missing")
+		return false, false, nil
+	}
+
+	channelHeader, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	if err != nil {
+		logger.Errorf("Consensus-type migration: Told to process a config tx with an invalid channel header: %s", err)
+		return false, false, nil
+	}
+
+	logger.Debugf("[channel: %s] Consensus-type migration: Processing, header: %s", chain.ChainID(), channelHeader.String())
+
+	switch channelHeader.Type {
+
+	case int32(cb.HeaderType_ORDERER_TRANSACTION):
+		isOrdererTx = true
+
+	case int32(cb.HeaderType_CONFIG):
+		configEnvelope, err := configtx.UnmarshalConfigEnvelope(payload.Data)
+		if err != nil {
+			logger.Errorf("Consensus-type migration: Cannot unmarshal config envelope form payload data: %s", err)
+			return false, false, nil
+		}
+		config := configEnvelope.Config
+		bundle, err := channelconfig.NewBundle(chain.ChainID(), config)
+		if err != nil {
+			logger.Errorf("Consensus-type migration: Cannot create new bundle from Config: %s", err)
+			return false, false, nil
+		}
+
+		ordConf, isOrdConf = bundle.OrdererConfig()
+		if !isOrdConf {
+			logger.Debugf("[channel: %s]  Consensus-type migration: Config tx does not have OrdererConfig, ignoring", chain.ChainID())
+		}
+	}
+
+	return isOrdererTx, isOrdConf, ordConf
 }

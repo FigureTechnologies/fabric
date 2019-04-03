@@ -40,7 +40,7 @@ func getEnv() Env {
 func getGoEnv() (Env, error) {
 	env := getEnv()
 
-	goenvbytes, err := runProgram(env, 10*time.Second, "go", "env")
+	goenvbytes, err := runProgram(env, time.Minute, "go", "env")
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +49,7 @@ func getGoEnv() (Env, error) {
 
 	envout := strings.Split(string(goenvbytes), "\n")
 	for _, entry := range envout {
+		entry = strings.TrimPrefix(entry, "set ")
 		tokens := strings.SplitN(entry, "=", 2)
 		if len(tokens) > 1 {
 			goenv[tokens[0]] = strings.Trim(tokens[1], "\"")

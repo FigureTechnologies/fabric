@@ -7,12 +7,15 @@ SPDX-License-Identifier: Apache-2.0
 package chaincode
 
 import (
+	"bytes"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/util"
+	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/sysccprovider"
@@ -23,10 +26,20 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	// InitializedKeyName is the reserved key in a chaincode's namespace which
+	// records the ID of the chaincode which initialized the namespace.
+	// In this way, we can enforce Init exactly once semantics, whenever
+	// the backing chaincode bytes change (but not be required to re-initialize
+	// the chaincode say, when endorsement policy changes).
+	InitializedKeyName = "\x00" + string(utf8.MaxRune) + "initialized"
+)
+
 // Runtime is used to manage chaincode runtime instances.
 type Runtime interface {
 	Start(ccci *ccprovider.ChaincodeContainerInfo, codePackage []byte) error
 	Stop(ccci *ccprovider.ChaincodeContainerInfo) error
+	Wait(ccci *ccprovider.ChaincodeContainerInfo) (int, error)
 }
 
 // Launcher is used to launch chaincode runtimes.
@@ -37,26 +50,27 @@ type Launcher interface {
 // Lifecycle provides a way to retrieve chaincode definitions and the packages necessary to run them
 type Lifecycle interface {
 	// ChaincodeDefinition returns the details for a chaincode by name
-	ChaincodeDefinition(chaincodeName string, qe ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error)
+	ChaincodeDefinition(channelID, chaincodeName string, qe ledger.SimpleQueryExecutor) (ccprovider.ChaincodeDefinition, error)
 
 	// ChaincodeContainerInfo returns the package necessary to launch a chaincode
-	ChaincodeContainerInfo(chaincodeName string, qe ledger.QueryExecutor) (*ccprovider.ChaincodeContainerInfo, error)
+	ChaincodeContainerInfo(channelID, chaincodeName string, qe ledger.SimpleQueryExecutor) (*ccprovider.ChaincodeContainerInfo, error)
 }
 
 // ChaincodeSupport responsible for providing interfacing with chaincodes from the Peer.
 type ChaincodeSupport struct {
-	Keepalive        time.Duration
-	ExecuteTimeout   time.Duration
-	UserRunsCC       bool
-	Runtime          Runtime
-	ACLProvider      ACLProvider
-	HandlerRegistry  *HandlerRegistry
-	Launcher         Launcher
-	SystemCCProvider sysccprovider.SystemChaincodeProvider
-	Lifecycle        Lifecycle
-	appConfig        ApplicationConfigRetriever
-	HandlerMetrics   *HandlerMetrics
-	LaunchMetrics    *LaunchMetrics
+	Keepalive              time.Duration
+	ExecuteTimeout         time.Duration
+	UserRunsCC             bool
+	Runtime                Runtime
+	ACLProvider            ACLProvider
+	HandlerRegistry        *HandlerRegistry
+	Launcher               Launcher
+	SystemCCProvider       sysccprovider.SystemChaincodeProvider
+	Lifecycle              Lifecycle
+	AppConfig              ApplicationConfigRetriever
+	HandlerMetrics         *HandlerMetrics
+	LaunchMetrics          *LaunchMetrics
+	DeployedCCInfoProvider ledger.DeployedChaincodeInfoProvider
 }
 
 // NewChaincodeSupport creates a new ChaincodeSupport instance.
@@ -74,18 +88,20 @@ func NewChaincodeSupport(
 	platformRegistry *platforms.Registry,
 	appConfig ApplicationConfigRetriever,
 	metricsProvider metrics.Provider,
+	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
 ) *ChaincodeSupport {
 	cs := &ChaincodeSupport{
-		UserRunsCC:       userRunsCC,
-		Keepalive:        config.Keepalive,
-		ExecuteTimeout:   config.ExecuteTimeout,
-		HandlerRegistry:  NewHandlerRegistry(userRunsCC),
-		ACLProvider:      aclProvider,
-		SystemCCProvider: SystemCCProvider,
-		Lifecycle:        lifecycle,
-		appConfig:        appConfig,
-		HandlerMetrics:   NewHandlerMetrics(metricsProvider),
-		LaunchMetrics:    NewLaunchMetrics(metricsProvider),
+		UserRunsCC:             userRunsCC,
+		Keepalive:              config.Keepalive,
+		ExecuteTimeout:         config.ExecuteTimeout,
+		HandlerRegistry:        NewHandlerRegistry(userRunsCC),
+		ACLProvider:            aclProvider,
+		SystemCCProvider:       SystemCCProvider,
+		Lifecycle:              lifecycle,
+		AppConfig:              appConfig,
+		HandlerMetrics:         NewHandlerMetrics(metricsProvider),
+		LaunchMetrics:          NewLaunchMetrics(metricsProvider),
+		DeployedCCInfoProvider: deployedCCInfoProvider,
 	}
 
 	// Keep TestQueries working
@@ -121,8 +137,7 @@ func NewChaincodeSupport(
 // as in the case of v1.0-v1.2 lifecycle, the chaincode will not yet be
 // defined in the LSCC table
 func (cs *ChaincodeSupport) LaunchInit(ccci *ccprovider.ChaincodeContainerInfo) error {
-	cname := ccci.Name + ":" + ccci.Version
-	if cs.HandlerRegistry.Handler(cname) != nil {
+	if cs.HandlerRegistry.Handler(ccintf.New(ccci.PackageID)) != nil {
 		return nil
 	}
 
@@ -132,31 +147,20 @@ func (cs *ChaincodeSupport) LaunchInit(ccci *ccprovider.ChaincodeContainerInfo) 
 // Launch starts executing chaincode if it is not already running. This method
 // blocks until the peer side handler gets into ready state or encounters a fatal
 // error. If the chaincode is already running, it simply returns.
-func (cs *ChaincodeSupport) Launch(chainID, chaincodeName, chaincodeVersion string, qe ledger.QueryExecutor) (*Handler, error) {
-	cname := chaincodeName + ":" + chaincodeVersion
-	if h := cs.HandlerRegistry.Handler(cname); h != nil {
+func (cs *ChaincodeSupport) Launch(chainID string, ccci *ccprovider.ChaincodeContainerInfo) (*Handler, error) {
+	ccid := ccintf.New(ccci.PackageID)
+
+	if h := cs.HandlerRegistry.Handler(ccid); h != nil {
 		return h, nil
 	}
 
-	ccci, err := cs.Lifecycle.ChaincodeContainerInfo(chaincodeName, qe)
-	if err != nil {
-		// TODO: There has to be a better way to do this...
-		if cs.UserRunsCC {
-			chaincodeLogger.Error(
-				"You are attempting to perform an action other than Deploy on Chaincode that is not ready and you are in developer mode. Did you forget to Deploy your chaincode?",
-			)
-		}
-
-		return nil, errors.Wrapf(err, "[channel %s] failed to get chaincode container info for %s", chainID, cname)
-	}
-
 	if err := cs.Launcher.Launch(ccci); err != nil {
-		return nil, errors.Wrapf(err, "[channel %s] could not launch chaincode %s", chainID, cname)
+		return nil, errors.Wrapf(err, "[channel %s] could not launch chaincode %s", chainID, ccci.PackageID)
 	}
 
-	h := cs.HandlerRegistry.Handler(cname)
+	h := cs.HandlerRegistry.Handler(ccid)
 	if h == nil {
-		return nil, errors.Wrapf(err, "[channel %s] claimed to start chaincode container for %s but could not find handler", chainID, cname)
+		return nil, errors.Errorf("[channel %s] claimed to start chaincode container for %s but could not find handler", chainID, ccci.PackageID)
 	}
 
 	return h, nil
@@ -183,7 +187,8 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		QueryResponseBuilder:       &QueryResponseGenerator{MaxResultLimit: 100},
 		UUIDGenerator:              UUIDGeneratorFunc(util.GenerateUUID),
 		LedgerGetter:               peer.Default,
-		AppConfig:                  cs.appConfig,
+		DeployedCCInfoProvider:     cs.DeployedCCInfoProvider,
+		AppConfig:                  cs.AppConfig,
 		Metrics:                    cs.HandlerMetrics,
 	}
 
@@ -217,16 +222,20 @@ func createCCMessage(messageType pb.ChaincodeMessage_Type, cid string, txid stri
 func (cs *ChaincodeSupport) ExecuteLegacyInit(txParams *ccprovider.TransactionParams, cccid *ccprovider.CCContext, spec *pb.ChaincodeDeploymentSpec) (*pb.Response, *pb.ChaincodeEvent, error) {
 	ccci := ccprovider.DeploymentSpecToChaincodeContainerInfo(spec)
 	ccci.Version = cccid.Version
+	// FIXME: this is a hack, we shouldn't construct the
+	// packageID manually but rather let lifecycle construct it
+	// for us. However this is legacy code that will disappear
+	// so it is acceptable for now (FAB-14627)
+	ccci.PackageID = persistence.PackageID(ccci.Name + ":" + ccci.Version)
 
 	err := cs.LaunchInit(ccci)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	cname := ccci.Name + ":" + ccci.Version
-	h := cs.HandlerRegistry.Handler(cname)
+	h := cs.HandlerRegistry.Handler(ccintf.New(ccci.PackageID))
 	if h == nil {
-		return nil, nil, errors.Wrapf(err, "[channel %s] claimed to start chaincode container for %s but could not find handler", txParams.ChannelID, cname)
+		return nil, nil, errors.Wrapf(err, "[channel %s] claimed to start chaincode container for %s but could not find handler", txParams.ChannelID, ccci.PackageID)
 	}
 
 	resp, err := cs.execute(pb.ChaincodeMessage_INIT, txParams, cccid, spec.GetChaincodeSpec().Input, h)
@@ -269,36 +278,101 @@ func processChaincodeExecutionResult(txid, ccName string, resp *pb.ChaincodeMess
 	}
 }
 
-func (cs *ChaincodeSupport) InvokeInit(txParams *ccprovider.TransactionParams, cccid *ccprovider.CCContext, input *pb.ChaincodeInput) (*pb.ChaincodeMessage, error) {
-	h, err := cs.Launch(txParams.ChannelID, cccid.Name, cccid.Version, txParams.TXSimulator)
-	if err != nil {
-		return nil, err
-	}
-
-	return cs.execute(pb.ChaincodeMessage_INIT, txParams, cccid, input, h)
-}
-
 // Invoke will invoke chaincode and return the message containing the response.
 // The chaincode will be launched if it is not already running.
 func (cs *ChaincodeSupport) Invoke(txParams *ccprovider.TransactionParams, cccid *ccprovider.CCContext, input *pb.ChaincodeInput) (*pb.ChaincodeMessage, error) {
-	h, err := cs.Launch(txParams.ChannelID, cccid.Name, cccid.Version, txParams.TXSimulator)
+	// at first we go to _lifecycle to retrieve information about the chaincode
+	var ccci *ccprovider.ChaincodeContainerInfo
+	var err error
+
+	if !cs.SystemCCProvider.IsSysCC(cccid.Name) {
+		ccci, err = cs.Lifecycle.ChaincodeContainerInfo(txParams.ChannelID, cccid.Name, txParams.TXSimulator)
+		if err != nil {
+			// TODO: There has to be a better way to do this...
+			if cs.UserRunsCC {
+				chaincodeLogger.Error(
+					"You are attempting to perform an action other than Deploy on Chaincode that is not ready and you are in developer mode. Did you forget to Deploy your chaincode?",
+				)
+			}
+
+			return nil, errors.Wrapf(err, "[channel %s] failed to get chaincode container info for %s", txParams.ChannelID, cccid.Name)
+		}
+	} else {
+		// FIXME: remove this once _lifecycle has definitions for all system chaincodes (FAB-14628)
+		ccci = &ccprovider.ChaincodeContainerInfo{
+			Version:   util.GetSysCCVersion(),
+			Name:      cccid.Name,
+			PackageID: persistence.PackageID(cccid.Name + ":" + util.GetSysCCVersion()),
+		}
+	}
+
+	// fill the chaincode version field from the chaincode
+	// container info that we got from _lifecycle
+	cccid.Version = ccci.Version
+
+	h, err := cs.Launch(txParams.ChannelID, ccci)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO add Init exactly once semantics here once new lifecycle
-	// is available.  Enforced if the target channel is using the new lifecycle
-	//
-	// First, the function name of the chaincode to invoke should be checked.  If it is
-	// "init", then consider this invocation to be of type pb.ChaincodeMessage_INIT,
-	// otherwise consider it to be of type pb.ChaincodeMessage_TRANSACTION,
-	//
-	// Secondly, A check should be made whether the chaincode has been
-	// inited, then, if true, only allow cctyp pb.ChaincodeMessage_TRANSACTION,
-	// otherwise, only allow cctype pb.ChaincodeMessage_INIT,
+	isInit, err := cs.CheckInit(txParams, cccid, input)
+	if err != nil {
+		return nil, err
+	}
+
 	cctype := pb.ChaincodeMessage_TRANSACTION
+	if isInit {
+		cctype = pb.ChaincodeMessage_INIT
+	}
 
 	return cs.execute(cctype, txParams, cccid, input, h)
+}
+
+func (cs *ChaincodeSupport) CheckInit(txParams *ccprovider.TransactionParams, cccid *ccprovider.CCContext, input *pb.ChaincodeInput) (bool, error) {
+	if txParams.ChannelID == "" {
+		// Channel-less invocations must be for SCCs, so, we ignore them for now
+		return false, nil
+	}
+
+	ac, ok := cs.AppConfig.GetApplicationConfig(txParams.ChannelID)
+	if !ok {
+		return false, errors.Errorf("could not retrieve application config for channel '%s'", txParams.ChannelID)
+	}
+
+	if !ac.Capabilities().LifecycleV20() {
+		return false, nil
+	}
+
+	if !cccid.InitRequired {
+		// If Init is not required, treat this as a normal invocation
+		// i.e. execute Invoke with 'init' as the function name
+		return false, nil
+	}
+
+	// At this point, we know we must enforce init exactly once semantics
+
+	value, err := txParams.TXSimulator.GetState(cccid.Name, InitializedKeyName)
+	if err != nil {
+		return false, errors.WithMessage(err, "could not get 'initialized' key")
+	}
+
+	needsInitialization := !bytes.Equal(value, []byte(cccid.Version))
+
+	switch {
+	case !input.IsInit && !needsInitialization:
+		return false, nil
+	case !input.IsInit && needsInitialization:
+		return false, errors.Errorf("chaincode '%s' has not been initialized for this version, must call as init first", cccid.Name)
+	case input.IsInit && !needsInitialization:
+		return false, errors.Errorf("chaincode '%s' is already initialized but called as init", cccid.Name)
+	default:
+		// input.IsInit && needsInitialization:
+		err = txParams.TXSimulator.SetState(cccid.Name, InitializedKeyName, []byte(cccid.Version))
+		if err != nil {
+			return false, errors.WithMessage(err, "could not set 'initialized' key")
+		}
+		return true, nil
+	}
 }
 
 // execute executes a transaction and waits for it to complete until a timeout value.

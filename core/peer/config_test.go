@@ -44,6 +44,10 @@ func TestConfiguration(t *testing.T) {
 		t.Fatal("Failed to get interface addresses")
 	}
 
+	// There is a flake where sometimes this returns no IP address.
+	localIP, err := GetLocalIP()
+	assert.NoError(t, err)
+
 	var tests = []struct {
 		name             string
 		settings         map[string]interface{}
@@ -77,7 +81,7 @@ func TestConfiguration(t *testing.T) {
 				"peer.address":           "0.0.0.0:7051",
 				"peer.id":                "testPeer",
 			},
-			validAddresses:   []string{fmt.Sprintf("%s:7051", GetLocalIP())},
+			validAddresses:   []string{fmt.Sprintf("%s:7051", localIP)},
 			invalidAddresses: []string{"0.0.0.0:7051"},
 		},
 	}
@@ -140,6 +144,14 @@ func TestGetServerConfig(t *testing.T) {
 	// keepalive options
 	assert.Equal(t, comm.DefaultKeepaliveOptions, sc.KaOpts,
 		"ServerConfig.KaOpts should be set to default values")
+	viper.Set("peer.keepalive.interval", "60m")
+	sc, _ = GetServerConfig()
+	assert.Equal(t, time.Duration(60)*time.Minute, sc.KaOpts.ServerInterval,
+		"ServerConfig.KaOpts.ServerInterval should be set to 60 min")
+	viper.Set("peer.keepalive.timeout", "30s")
+	sc, _ = GetServerConfig()
+	assert.Equal(t, time.Duration(30)*time.Second, sc.KaOpts.ServerTimeout,
+		"ServerConfig.KaOpts.ServerTimeout should be set to 30 sec")
 	viper.Set("peer.keepalive.minInterval", "2m")
 	sc, _ = GetServerConfig()
 	assert.Equal(t, time.Duration(2)*time.Minute, sc.KaOpts.ServerMinInterval,

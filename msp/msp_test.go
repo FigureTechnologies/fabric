@@ -53,11 +53,36 @@ func TestMSPParsers(t *testing.T) {
 
 	sigid := &msp.SigningIdentityInfo{PublicSigner: []byte("barf"), PrivateSigner: nil}
 	_, err = localMsp.(*bccspmsp).getSigningIdentityFromConf(sigid)
+	assert.Error(t, err)
 
 	keyinfo := &msp.KeyInfo{KeyIdentifier: "PEER", KeyMaterial: nil}
 	sigid = &msp.SigningIdentityInfo{PublicSigner: []byte("barf"), PrivateSigner: keyinfo}
 	_, err = localMsp.(*bccspmsp).getSigningIdentityFromConf(sigid)
 	assert.Error(t, err)
+}
+
+func TestGetSigningIdentityFromConfWithWrongPrivateCert(t *testing.T) {
+	// Temporary Replace root certs
+	oldRoots := localMsp.(*bccspmsp).opts.Roots
+	defer func() {
+		// Restore original root certs
+		localMsp.(*bccspmsp).opts.Roots = oldRoots
+	}()
+	_, cert := generateSelfSignedCert(t, time.Now())
+	localMsp.(*bccspmsp).opts.Roots = x509.NewCertPool()
+	localMsp.(*bccspmsp).opts.Roots.AddCert(cert)
+
+	// Use self signed cert as public key. Convert DER to PEM format
+	pem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+
+	// Use wrong formatted private cert
+	keyinfo := &msp.KeyInfo{
+		KeyMaterial:   []byte("wrong encoding"),
+		KeyIdentifier: "MyPrivateKey",
+	}
+	sigid := &msp.SigningIdentityInfo{PublicSigner: pem, PrivateSigner: keyinfo}
+	_, err := localMsp.(*bccspmsp).getSigningIdentityFromConf(sigid)
+	assert.EqualError(t, err, "MyPrivateKey: wrong PEM encoding")
 }
 
 func TestMSPSetupNoCryptoConf(t *testing.T) {
@@ -1171,13 +1196,10 @@ func getLocalMSPWithVersionAndError(t *testing.T, dir string, version MSPVersion
 	conf, err := GetLocalMspConfig(dir, nil, "SampleOrg")
 	assert.NoError(t, err)
 
-	thisMSP, err := newBccspMsp(version)
-	assert.NoError(t, err)
 	ks, err := sw.NewFileBasedKeyStore(nil, filepath.Join(dir, "keystore"), true)
 	assert.NoError(t, err)
-	csp, err := sw.NewWithParams(256, "SHA2", ks)
+	thisMSP, err := NewBccspMspWithKeyStore(version, ks)
 	assert.NoError(t, err)
-	thisMSP.(*bccspmsp).bccsp = csp
 
 	return thisMSP, thisMSP.Setup(conf)
 }
@@ -1186,14 +1208,10 @@ func getLocalMSP(t *testing.T, dir string) MSP {
 	conf, err := GetLocalMspConfig(dir, nil, "SampleOrg")
 	assert.NoError(t, err)
 
-	thisMSP, err := newBccspMsp(MSPv1_0)
-	assert.NoError(t, err)
 	ks, err := sw.NewFileBasedKeyStore(nil, filepath.Join(dir, "keystore"), true)
 	assert.NoError(t, err)
-	csp, err := sw.NewWithParams(256, "SHA2", ks)
-	assert.NoError(t, err)
-	thisMSP.(*bccspmsp).bccsp = csp
 
+	thisMSP, err := NewBccspMspWithKeyStore(MSPv1_0, ks)
 	err = thisMSP.Setup(conf)
 	assert.NoError(t, err)
 
@@ -1204,13 +1222,10 @@ func getLocalMSPWithVersion(t *testing.T, dir string, version MSPVersion) MSP {
 	conf, err := GetLocalMspConfig(dir, nil, "SampleOrg")
 	assert.NoError(t, err)
 
-	thisMSP, err := newBccspMsp(version)
-	assert.NoError(t, err)
 	ks, err := sw.NewFileBasedKeyStore(nil, filepath.Join(dir, "keystore"), true)
 	assert.NoError(t, err)
-	csp, err := sw.NewWithParams(256, "SHA2", ks)
+	thisMSP, err := NewBccspMspWithKeyStore(version, ks)
 	assert.NoError(t, err)
-	thisMSP.(*bccspmsp).bccsp = csp
 
 	err = thisMSP.Setup(conf)
 	assert.NoError(t, err)

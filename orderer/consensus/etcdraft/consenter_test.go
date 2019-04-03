@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
@@ -25,10 +26,12 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/orderer"
 	etcdraftproto "github.com/hyperledger/fabric/protos/orderer/etcdraft"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var _ = Describe("Consenter", func() {
@@ -61,8 +64,8 @@ var _ = Describe("Consenter", func() {
 			},
 			Data: goodConfigBlock.Data,
 			Metadata: &common.BlockMetadata{
-				Metadata: [][]byte{{}, utils.MarshalOrPanic(&common.Metadata{
-					Value: utils.MarshalOrPanic(&common.LastConfig{Index: 0}),
+				Metadata: [][]byte{{}, protoutil.MarshalOrPanic(&common.Metadata{
+					Value: protoutil.MarshalOrPanic(&common.LastConfig{Index: 0}),
 				})},
 			},
 		}
@@ -77,7 +80,7 @@ var _ = Describe("Consenter", func() {
 	When("the consenter is extracting the channel", func() {
 		It("extracts successfully from step requests", func() {
 			consenter := newConsenter(chainGetter)
-			ch := consenter.TargetChannel(&orderer.StepRequest{Channel: "mychannel"})
+			ch := consenter.TargetChannel(&orderer.ConsensusRequest{Channel: "mychannel"})
 			Expect(ch).To(BeIdenticalTo("mychannel"))
 		})
 		It("extracts successfully from submit requests", func() {
@@ -139,96 +142,93 @@ var _ = Describe("Consenter", func() {
 
 	It("successfully constructs a Chain", func() {
 		certBytes := []byte("cert.orderer0.org0")
-		m := &etcdraftproto.Metadata{
+		m := &etcdraftproto.ConfigMetadata{
 			Consenters: []*etcdraftproto.Consenter{
 				{ServerTlsCert: certBytes},
 			},
 			Options: &etcdraftproto.Options{
-				TickInterval:    100,
-				ElectionTick:    10,
-				HeartbeatTick:   1,
-				MaxInflightMsgs: 256,
-				MaxSizePerMsg:   1048576,
+				TickInterval:      "500ms",
+				ElectionTick:      10,
+				HeartbeatTick:     1,
+				MaxInflightBlocks: 5,
 			},
 		}
-		metadata := utils.MarshalOrPanic(m)
-		support.SharedConfigReturns(&mockconfig.Orderer{ConsensusMetadataVal: metadata})
+		metadata := protoutil.MarshalOrPanic(m)
+		support.SharedConfigReturns(&mockconfig.Orderer{
+			ConsensusMetadataVal: metadata,
+			CapabilitiesVal: &mockconfig.OrdererCapabilities{
+				Kafka2RaftMigVal: false,
+			},
+			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+		})
 
 		consenter := newConsenter(chainGetter)
 		consenter.EtcdRaftConfig.WALDir = walDir
 		consenter.EtcdRaftConfig.SnapDir = snapDir
+		// consenter.EtcdRaftConfig.EvictionSuspicion is missing
+		var defaultSuspicionFallback bool
+		consenter.Metrics = newFakeMetrics(newFakeMetricsFields())
+		consenter.Logger = consenter.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+			if strings.Contains(entry.Message, "EvictionSuspicion not set, defaulting to 10m0s") {
+				defaultSuspicionFallback = true
+			}
+			return nil
+		}))
 
 		chain, err := consenter.HandleChain(support, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(chain).NotTo(BeNil())
 
 		Expect(chain.Start).NotTo(Panic())
+		Expect(defaultSuspicionFallback).To(BeTrue())
 	})
 
 	It("fails to handle chain if no matching cert found", func() {
-		m := &etcdraftproto.Metadata{
+		m := &etcdraftproto.ConfigMetadata{
 			Consenters: []*etcdraftproto.Consenter{
 				{ServerTlsCert: []byte("cert.orderer1.org1")},
 			},
 			Options: &etcdraftproto.Options{
-				TickInterval:    100,
-				ElectionTick:    10,
-				HeartbeatTick:   1,
-				MaxInflightMsgs: 256,
-				MaxSizePerMsg:   1048576,
+				TickInterval:      "500ms",
+				ElectionTick:      10,
+				HeartbeatTick:     1,
+				MaxInflightBlocks: 5,
 			},
 		}
-		metadata := utils.MarshalOrPanic(m)
-		support.SharedConfigReturns(&mockconfig.Orderer{ConsensusMetadataVal: metadata})
+		metadata := protoutil.MarshalOrPanic(m)
+		support := &consensusmocks.FakeConsenterSupport{}
+		support.SharedConfigReturns(&mockconfig.Orderer{
+			ConsensusMetadataVal: metadata,
+			CapabilitiesVal: &mockconfig.OrdererCapabilities{
+				Kafka2RaftMigVal: false,
+			},
+			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+		})
+		support.ChainIDReturns("foo")
 
 		consenter := newConsenter(chainGetter)
 
 		chain, err := consenter.HandleChain(support, &common.Metadata{})
-		Expect(chain).To(BeNil())
-		Expect(err).To(MatchError("failed to detect own Raft ID because no matching certificate found"))
-	})
-
-	It("fails to handle chain if WAL is expected but no data found", func() {
-		c := &etcdraftproto.Consenter{ServerTlsCert: []byte("cert.orderer0.org0")}
-		m := &etcdraftproto.Metadata{
-			Consenters: []*etcdraftproto.Consenter{c},
-			Options: &etcdraftproto.Options{
-				TickInterval:    100,
-				ElectionTick:    10,
-				HeartbeatTick:   1,
-				MaxInflightMsgs: 256,
-				MaxSizePerMsg:   1048576,
-			},
-		}
-		metadata := utils.MarshalOrPanic(m)
-		support.SharedConfigReturns(&mockconfig.Orderer{ConsensusMetadataVal: metadata})
-
-		dir, err := ioutil.TempDir("", "wal-")
-		Expect(err).NotTo(HaveOccurred())
-		defer os.RemoveAll(dir)
-
-		consenter := newConsenter(chainGetter)
-		consenter.EtcdRaftConfig.WALDir = walDir
-		consenter.EtcdRaftConfig.SnapDir = snapDir
-
-		d := &etcdraftproto.RaftMetadata{
-			Consenters: map[uint64]*etcdraftproto.Consenter{1: c},
-			RaftIndex:  uint64(2),
-		}
-		chain, err := consenter.HandleChain(support, &common.Metadata{Value: utils.MarshalOrPanic(d)})
-
-		Expect(chain).To(BeNil())
-		Expect(err).To(MatchError(ContainSubstring("no WAL data found")))
+		Expect(chain).To(Not(BeNil()))
+		Expect(err).To(Not(HaveOccurred()))
+		Expect(chain.Order(nil, 0).Error()).To(Equal("channel foo is not serviced by me"))
+		consenter.icr.AssertNumberOfCalls(testingInstance, "TrackChain", 1)
 	})
 
 	It("fails to handle chain if etcdraft options have not been provided", func() {
-		m := &etcdraftproto.Metadata{
+		m := &etcdraftproto.ConfigMetadata{
 			Consenters: []*etcdraftproto.Consenter{
 				{ServerTlsCert: []byte("cert.orderer1.org1")},
 			},
 		}
-		metadata := utils.MarshalOrPanic(m)
-		support.SharedConfigReturns(&mockconfig.Orderer{ConsensusMetadataVal: metadata})
+		metadata := protoutil.MarshalOrPanic(m)
+		support.SharedConfigReturns(&mockconfig.Orderer{
+			ConsensusMetadataVal: metadata,
+			CapabilitiesVal: &mockconfig.OrdererCapabilities{
+				Kafka2RaftMigVal: false,
+			},
+			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+		})
 
 		consenter := newConsenter(chainGetter)
 
@@ -237,18 +237,54 @@ var _ = Describe("Consenter", func() {
 		Expect(err).To(MatchError("etcdraft options have not been provided"))
 	})
 
+	It("fails to handle chain if tick interval is invalid", func() {
+		certBytes := []byte("cert.orderer0.org0")
+		m := &etcdraftproto.ConfigMetadata{
+			Consenters: []*etcdraftproto.Consenter{
+				{ServerTlsCert: certBytes},
+			},
+			Options: &etcdraftproto.Options{
+				TickInterval:      "500",
+				ElectionTick:      10,
+				HeartbeatTick:     1,
+				MaxInflightBlocks: 5,
+			},
+		}
+		metadata := protoutil.MarshalOrPanic(m)
+		support.SharedConfigReturns(&mockconfig.Orderer{
+			ConsensusMetadataVal: metadata,
+			CapabilitiesVal: &mockconfig.OrdererCapabilities{
+				Kafka2RaftMigVal: false,
+			},
+			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+		})
+
+		consenter := newConsenter(chainGetter)
+
+		chain, err := consenter.HandleChain(support, nil)
+		Expect(chain).To(BeNil())
+		Expect(err).To(MatchError("failed to parse TickInterval (500) to time duration"))
+	})
 })
 
-func newConsenter(chainGetter *mocks.ChainGetter) *etcdraft.Consenter {
+type consenter struct {
+	*etcdraft.Consenter
+	icr *mocks.InactiveChainRegistry
+}
+
+func newConsenter(chainGetter *mocks.ChainGetter) *consenter {
 	communicator := &clustermocks.Communicator{}
 	ca, err := tlsgen.NewCA()
 	Expect(err).NotTo(HaveOccurred())
 	communicator.On("Configure", mock.Anything, mock.Anything)
-	consenter := &etcdraft.Consenter{
-		Communication: communicator,
-		Cert:          []byte("cert.orderer0.org0"),
-		Logger:        flogging.MustGetLogger("test"),
-		Chains:        chainGetter,
+	icr := &mocks.InactiveChainRegistry{}
+	icr.On("TrackChain", "foo", mock.Anything, mock.Anything)
+	c := &etcdraft.Consenter{
+		InactiveChainRegistry: icr,
+		Communication:         communicator,
+		Cert:                  []byte("cert.orderer0.org0"),
+		Logger:                flogging.MustGetLogger("test"),
+		Chains:                chainGetter,
 		Dispatcher: &etcdraft.Dispatcher{
 			Logger:        flogging.MustGetLogger("test"),
 			ChainSelector: &mocks.ReceiverGetter{},
@@ -259,5 +295,8 @@ func newConsenter(chainGetter *mocks.ChainGetter) *etcdraft.Consenter {
 			},
 		}),
 	}
-	return consenter
+	return &consenter{
+		Consenter: c,
+		icr:       icr,
+	}
 }

@@ -40,6 +40,7 @@ type MockSupport struct {
 	IsJavaErr                        error
 	GetApplicationConfigRv           channelconfig.Application
 	GetApplicationConfigBoolRv       bool
+	DeployedCCInfoProvider           ledger.DeployedChaincodeInfoProvider
 }
 
 func (s *MockSupport) Serialize() ([]byte, error) {
@@ -98,7 +99,7 @@ func (s *MockSupport) ExecuteLegacyInit(txParams *ccprovider.TransactionParams, 
 	return s.ExecuteCDSResp, s.ExecuteCDSEvent, s.ExecuteCDSError
 }
 
-func (s *MockSupport) Execute(txParams *ccprovider.TransactionParams, cid, name, version, txid string, signedProp *pb.SignedProposal, prop *pb.Proposal, spec *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error) {
+func (s *MockSupport) Execute(txParams *ccprovider.TransactionParams, cid, name, txid string, idBytes []byte, initRequired bool, signedProp *pb.SignedProposal, prop *pb.Proposal, spec *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error) {
 	return s.ExecuteResp, s.ExecuteEvent, s.ExecuteError
 }
 
@@ -106,7 +107,7 @@ func (s *MockSupport) GetChaincodeDeploymentSpecFS(cds *pb.ChaincodeDeploymentSp
 	return cds, nil
 }
 
-func (s *MockSupport) GetChaincodeDefinition(chaincodeName string, txsim ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error) {
+func (s *MockSupport) GetChaincodeDefinition(channelID, chaincodeName string, txsim ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error) {
 	return s.ChaincodeDefinitionRv, s.ChaincodeDefinitionError
 }
 
@@ -124,4 +125,8 @@ func (s *MockSupport) CheckInstantiationPolicy(name, version string, cd ccprovid
 
 func (s *MockSupport) GetApplicationConfig(cid string) (channelconfig.Application, bool) {
 	return s.GetApplicationConfigRv, s.GetApplicationConfigBoolRv
+}
+
+func (s *MockSupport) GetDeployedCCInfoProvider() ledger.DeployedChaincodeInfoProvider {
+	return s.DeployedCCInfoProvider
 }

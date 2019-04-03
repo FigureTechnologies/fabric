@@ -2,9 +2,9 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	container "github.com/hyperledger/fabric/core/container"
+	"github.com/hyperledger/fabric/core/container"
 )
 
 type Processor struct {

@@ -22,7 +22,7 @@ import (
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -58,7 +58,7 @@ var _ = Describe("EndToEndACL", func() {
 		soloConfig.RemovePeer("Org2", "peer1")
 		Expect(soloConfig.Peers).To(HaveLen(2))
 
-		network = nwo.New(soloConfig, testDir, client, BasePort(), components)
+		network = nwo.New(soloConfig, testDir, client, StartPort(), components)
 		network.GenerateConfigTree()
 		network.Bootstrap()
 
@@ -118,7 +118,7 @@ var _ = Describe("EndToEndACL", func() {
 		Eventually(sess.Err, network.EventuallyTimeout).Should(gbytes.Say("Chaincode invoke successful. result: status:200"))
 
 		//
-		// when the ACL policy for DeliverFiltered is not satisifed
+		// when the ACL policy for DeliverFiltered is not satisfied
 		//
 		By("setting the filtered block event ACL policy to org2/Admins")
 		policyName = resources.Event_FilteredBlock
@@ -145,7 +145,7 @@ var _ = Describe("EndToEndACL", func() {
 		Expect(sess.Err).To(gbytes.Say("Received block: "))
 
 		//
-		// when the ACL policy for Deliver is not satisifed
+		// when the ACL policy for Deliver is not satisfied
 		//
 		By("fetching the latest block from the peer as a forbidden org2 Admin identity")
 		sess, err = network.PeerAdminSession(org2Peer0, fetchNewest)
@@ -248,20 +248,20 @@ func SetACLPolicy(network *nwo.Network, channel, policyName, policy string, orde
 	submitter := network.Peer("Org1", "peer0")
 	signer := network.Peer("Org2", "peer0")
 
-	config := nwo.GetConfigBlock(network, submitter, orderer, channel)
+	config := nwo.GetConfig(network, submitter, orderer, channel)
 	updatedConfig := proto.Clone(config).(*common.Config)
 
 	// set the policy
 	updatedConfig.ChannelGroup.Groups["Application"].Values["ACLs"] = &common.ConfigValue{
 		ModPolicy: "Admins",
-		Value: utils.MarshalOrPanic(&pb.ACLs{
+		Value: protoutil.MarshalOrPanic(&pb.ACLs{
 			Acls: map[string]*pb.APIResource{
 				policyName: {PolicyRef: policy},
 			},
 		}),
 	}
 
-	nwo.UpdateConfig(network, orderer, channel, config, updatedConfig, submitter, signer)
+	nwo.UpdateConfig(network, orderer, channel, config, updatedConfig, true, submitter, signer)
 }
 
 // GetTxIDFromBlock gets a transaction id from a block that has been
@@ -269,13 +269,13 @@ func SetACLPolicy(network *nwo.Network, channel, policyName, policy string, orde
 func GetTxIDFromBlockFile(blockFile string) string {
 	block := nwo.UnmarshalBlockFromFile(blockFile)
 
-	envelope, err := utils.GetEnvelopeFromBlock(block.Data.Data[0])
+	envelope, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[0])
 	Expect(err).NotTo(HaveOccurred())
 
-	payload, err := utils.GetPayload(envelope)
+	payload, err := protoutil.GetPayload(envelope)
 	Expect(err).NotTo(HaveOccurred())
 
-	chdr, err := utils.UnmarshalChannelHeader(payload.Header.ChannelHeader)
+	chdr, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
 	Expect(err).NotTo(HaveOccurred())
 
 	return chdr.TxId

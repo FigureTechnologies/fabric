@@ -25,13 +25,13 @@ func TestCollElgNotifier(t *testing.T) {
 	// Returns 3 collections - the bool value indicates the eligibility of peer for corresponding collection
 	mockDeployedChaincodeInfoProvider.ChaincodeInfoReturnsOnCall(0,
 		&ledger.DeployedChaincodeInfo{
-			CollectionConfigPkg: testutilPrepapreMockCollectionConfigPkg(
+			ExplicitCollectionConfigPkg: testutilPrepapreMockCollectionConfigPkg(
 				map[string]bool{"coll1": true, "coll2": true, "coll3": false})}, nil)
 
 	// post commit - returns 4 collections
 	mockDeployedChaincodeInfoProvider.ChaincodeInfoReturnsOnCall(1,
 		&ledger.DeployedChaincodeInfo{
-			CollectionConfigPkg: testutilPrepapreMockCollectionConfigPkg(
+			ExplicitCollectionConfigPkg: testutilPrepapreMockCollectionConfigPkg(
 				map[string]bool{"coll1": false, "coll2": true, "coll3": true, "coll4": true})}, nil)
 
 	mockMembershipInfoProvider := &mock.MembershipInfoProvider{}
@@ -51,11 +51,13 @@ func TestCollElgNotifier(t *testing.T) {
 	collElgNotifier.HandleStateUpdates(&ledger.StateUpdateTrigger{
 		LedgerID:           "testLedger",
 		CommittingBlockNum: uint64(500),
-		StateUpdates: map[string]interface{}{
-			"doesNotMatterNS": []*kvrwset.KVWrite{
-				{
-					Key:   "doesNotMatterKey",
-					Value: []byte("doesNotMatterVal"),
+		StateUpdates: map[string]*ledger.KVStateUpdates{
+			"doesNotMatterNS": {
+				PublicUpdates: []*kvrwset.KVWrite{
+					{
+						Key:   "doesNotMatterKey",
+						Value: []byte("doesNotMatterVal"),
+					},
 				},
 			},
 		},

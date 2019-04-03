@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric/common/channelconfig"
-	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/core/aclmgmt"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/chaincode"
@@ -21,6 +20,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/core/scc"
+	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
@@ -30,7 +30,7 @@ import (
 // issuing calls to various static methods of the peer
 type SupportImpl struct {
 	*PluginEndorser
-	crypto.SignerSupport
+	identity.SignerSerializer
 	Peer             peer.Operations
 	PeerSupport      peer.Support
 	ChaincodeSupport *chaincode.ChaincodeSupport
@@ -47,7 +47,7 @@ func (s *SupportImpl) NewQueryCreator(channel string) (QueryCreator, error) {
 }
 
 func (s *SupportImpl) SigningIdentityForRequest(*pb.SignedProposal) (SigningIdentity, error) {
-	return s.SignerSupport, nil
+	return s.SignerSerializer, nil
 }
 
 // IsSysCCAndNotInvokableExternal returns true if the supplied chaincode is
@@ -132,10 +132,11 @@ func (s *SupportImpl) ExecuteLegacyInit(txParams *ccprovider.TransactionParams, 
 }
 
 // Execute a proposal and return the chaincode response
-func (s *SupportImpl) Execute(txParams *ccprovider.TransactionParams, cid, name, version, txid string, signedProp *pb.SignedProposal, prop *pb.Proposal, input *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error) {
+func (s *SupportImpl) Execute(txParams *ccprovider.TransactionParams, cid, name, txid string, idBytes []byte, requiresInit bool, signedProp *pb.SignedProposal, prop *pb.Proposal, input *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error) {
 	cccid := &ccprovider.CCContext{
-		Name:    name,
-		Version: version,
+		Name:         name,
+		InitRequired: requiresInit,
+		ID:           idBytes,
 	}
 
 	// decorate the chaincode input
@@ -148,8 +149,8 @@ func (s *SupportImpl) Execute(txParams *ccprovider.TransactionParams, cid, name,
 }
 
 // GetChaincodeDefinition returns ccprovider.ChaincodeDefinition for the chaincode with the supplied name
-func (s *SupportImpl) GetChaincodeDefinition(chaincodeName string, txsim ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error) {
-	return s.ChaincodeSupport.Lifecycle.ChaincodeDefinition(chaincodeName, txsim)
+func (s *SupportImpl) GetChaincodeDefinition(channelID, chaincodeName string, txsim ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error) {
+	return s.ChaincodeSupport.Lifecycle.ChaincodeDefinition(channelID, chaincodeName, txsim)
 }
 
 // CheckACL checks the ACL for the resource for the Channel using the
@@ -172,12 +173,21 @@ func (s *SupportImpl) IsJavaCC(buf []byte) (bool, error) {
 
 // CheckInstantiationPolicy returns an error if the instantiation in the supplied
 // ChaincodeDefinition differs from the instantiation policy stored on the ledger
+// If the definition is not of the legacy ChaincodeData type, it returns successfully.
 func (s *SupportImpl) CheckInstantiationPolicy(name, version string, cd ccprovider.ChaincodeDefinition) error {
-	return ccprovider.CheckInstantiationPolicy(name, version, cd.(*ccprovider.ChaincodeData))
+	if cData, ok := cd.(*ccprovider.ChaincodeData); ok {
+		return ccprovider.CheckInstantiationPolicy(name, version, cData)
+	}
+	return nil
 }
 
 // GetApplicationConfig returns the configtxapplication.SharedConfig for the Channel
 // and whether the Application config exists
 func (s *SupportImpl) GetApplicationConfig(cid string) (channelconfig.Application, bool) {
 	return s.PeerSupport.GetApplicationConfig(cid)
+}
+
+// GetDeployedCCInfoProvider returns ledger.DeployedChaincodeInfoProvider
+func (s *SupportImpl) GetDeployedCCInfoProvider() ledger.DeployedChaincodeInfoProvider {
+	return s.ChaincodeSupport.DeployedCCInfoProvider
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/customtx"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
 
@@ -40,6 +40,7 @@ var once sync.Once
 // Initializer encapsulates all the external dependencies for the ledger module
 type Initializer struct {
 	CustomTxProcessors            customtx.Processors
+	StateListeners                []ledger.StateListener
 	PlatformRegistry              *platforms.Registry
 	DeployedChaincodeInfoProvider ledger.DeployedChaincodeInfoProvider
 	MembershipInfoProvider        ledger.MembershipInfoProvider
@@ -65,18 +66,21 @@ func initialize(initializer *Initializer) {
 		initializer.PlatformRegistry,
 		initializer.DeployedChaincodeInfoProvider,
 	})
-	finalStateListeners := addListenerForCCEventsHandler(initializer.DeployedChaincodeInfoProvider, []ledger.StateListener{})
+	finalStateListeners := addListenerForCCEventsHandler(initializer.DeployedChaincodeInfoProvider, initializer.StateListeners)
 	provider, err := kvledger.NewProvider()
 	if err != nil {
 		panic(errors.WithMessage(err, "Error in instantiating ledger provider"))
 	}
-	provider.Initialize(&ledger.Initializer{
+	err = provider.Initialize(&ledger.Initializer{
 		StateListeners:                finalStateListeners,
 		DeployedChaincodeInfoProvider: initializer.DeployedChaincodeInfoProvider,
 		MembershipInfoProvider:        initializer.MembershipInfoProvider,
 		MetricsProvider:               initializer.MetricsProvider,
 		HealthCheckRegistry:           initializer.HealthCheckRegistry,
 	})
+	if err != nil {
+		panic(errors.WithMessage(err, "Error initializing ledger provider"))
+	}
 	ledgerProvider = provider
 	logger.Info("ledger mgmt initialized")
 }
@@ -90,7 +94,7 @@ func CreateLedger(genesisBlock *common.Block) (ledger.PeerLedger, error) {
 	if !initialized {
 		return nil, ErrLedgerMgmtNotInitialized
 	}
-	id, err := utils.GetChainIDFromBlock(genesisBlock)
+	id, err := protoutil.GetChainIDFromBlock(genesisBlock)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +208,7 @@ func (p *chaincodeInfoProviderImpl) GetDeployedChaincodeInfo(chainid string,
 		return nil, err
 	}
 	defer qe.Done()
-	deployedChaincodeInfo, err := p.deployedCCInfoProvider.ChaincodeInfo(chaincodeDefinition.Name, qe)
+	deployedChaincodeInfo, err := p.deployedCCInfoProvider.ChaincodeInfo(chainid, chaincodeDefinition.Name, qe)
 	if err != nil || deployedChaincodeInfo == nil {
 		return nil, err
 	}

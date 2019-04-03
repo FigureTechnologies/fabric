@@ -14,11 +14,11 @@ import (
 	"github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/configtxgentest"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/encoder"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	ledger2 "github.com/hyperledger/fabric/core/ledger"
 	cut "github.com/hyperledger/fabric/core/ledger/util"
+	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
+	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
+	"github.com/hyperledger/fabric/internal/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/stretchr/testify/assert"
@@ -119,21 +119,6 @@ func (m *mockLedger) CommitPvtDataOfOldBlocks(blockPvtData []*ledger2.BlockPvtDa
 
 func (m *mockLedger) GetMissingPvtDataTracker() (ledger2.MissingPvtDataTracker, error) {
 	panic("implement me")
-}
-
-func (m *mockLedger) PurgePrivateData(maxBlockNumToRetain uint64) error {
-	args := m.Called(maxBlockNumToRetain)
-	return args.Error(0)
-}
-
-func (m *mockLedger) PrivateDataMinBlockNum() (uint64, error) {
-	args := m.Called()
-	return args.Get(0).(uint64), args.Error(1)
-}
-
-func (m *mockLedger) Prune(policy ledger.PrunePolicy) error {
-	args := m.Called(policy)
-	return args.Error(0)
 }
 
 func createLedger(channelID string) (*common.Block, *mockLedger) {

@@ -1,5 +1,6 @@
 /*
 Copyright IBM Corp. All Rights Reserved.
+
 SPDX-License-Identifier: Apache-2.0
 */
 
@@ -13,7 +14,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/core/ledger/ledgerstorage"
 	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 )
 
 // ConstructValidAndInvalidPvtData computes the valid pvt data and hash mismatch list
@@ -77,7 +78,7 @@ func retrieveRwsetForTx(blkNum uint64, txNum uint64, blockStore *ledgerstorage.S
 		return nil, err
 	}
 	// retrieve pvtRWset hash from the txEnvelope
-	responsePayload, err := utils.GetActionFromEnvelopeMsg(txEnvelope)
+	responsePayload, err := protoutil.GetActionFromEnvelopeMsg(txEnvelope)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func findValidAndInvalidTxPvtData(txPvtData *ledger.TxPvtData, txRWSet *rwsetuti
 		toDeleteNsColl = append(toDeleteNsColl, invalidNsColl...)
 	}
 	for _, nsColl := range toDeleteNsColl {
-		txPvtData.WriteSet.Remove(nsColl.ns, nsColl.coll)
+		removeCollFromTxPvtReadWriteSet(txPvtData.WriteSet, nsColl.ns, nsColl.coll)
 	}
 	if len(txPvtData.WriteSet.NsPvtRwset) == 0 {
 		// denotes that all namespaces had
@@ -110,6 +111,33 @@ func findValidAndInvalidTxPvtData(txPvtData *ledger.TxPvtData, txRWSet *rwsetuti
 		return nil, invalidPvtData
 	}
 	return txPvtData, invalidPvtData
+}
+
+// Remove removes the rwset for the given <ns, coll> tuple. If after this removal,
+// there are no more collection in the namespace <ns>, the whole namespace entry is removed
+func removeCollFromTxPvtReadWriteSet(p *rwset.TxPvtReadWriteSet, ns, coll string) {
+	for i := 0; i < len(p.NsPvtRwset); i++ {
+		n := p.NsPvtRwset[i]
+		if n.Namespace != ns {
+			continue
+		}
+		removeCollFromNsPvtWriteSet(n, coll)
+		if len(n.CollectionPvtRwset) == 0 {
+			p.NsPvtRwset = append(p.NsPvtRwset[:i], p.NsPvtRwset[i+1:]...)
+		}
+		return
+	}
+}
+
+func removeCollFromNsPvtWriteSet(n *rwset.NsPvtReadWriteSet, collName string) {
+	for i := 0; i < len(n.CollectionPvtRwset); i++ {
+		c := n.CollectionPvtRwset[i]
+		if c.CollectionName != collName {
+			continue
+		}
+		n.CollectionPvtRwset = append(n.CollectionPvtRwset[:i], n.CollectionPvtRwset[i+1:]...)
+		return
+	}
 }
 
 type nsColl struct {

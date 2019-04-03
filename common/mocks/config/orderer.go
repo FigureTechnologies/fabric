@@ -19,6 +19,11 @@ type Orderer struct {
 	ConsensusTypeVal string
 	// ConsensusMetadataVal is returned as the result of ConsensusMetadata()
 	ConsensusMetadataVal []byte
+
+	ConsensusTypeMigrationStateVal ab.ConsensusType_MigrationState
+
+	ConsensusTypeMigrationContextVal uint64
+
 	// BatchSizeVal is returned as the result of BatchSize()
 	BatchSizeVal *ab.BatchSize
 	// BatchTimeoutVal is returned as the result of BatchTimeout()
@@ -28,7 +33,7 @@ type Orderer struct {
 	// MaxChannelsCountVal is returns as the result of MaxChannelsCount()
 	MaxChannelsCountVal uint64
 	// OrganizationsVal is returned as the result of Organizations()
-	OrganizationsVal map[string]channelconfig.Org
+	OrganizationsVal map[string]channelconfig.OrdererOrg
 	// CapabilitiesVal is returned as the result of Capabilities()
 	CapabilitiesVal channelconfig.OrdererCapabilities
 }
@@ -41,6 +46,16 @@ func (o *Orderer) ConsensusType() string {
 // ConsensusMetadata returns the ConsensusMetadataVal
 func (o *Orderer) ConsensusMetadata() []byte {
 	return o.ConsensusMetadataVal
+}
+
+// ConsensusMigrationState returns the ConsensusTypeMigrationStateVal
+func (o *Orderer) ConsensusMigrationState() ab.ConsensusType_MigrationState {
+	return o.ConsensusTypeMigrationStateVal
+}
+
+// ConsensusMigrationContext returns the ConsensusTypeMigrationContextVal
+func (o *Orderer) ConsensusMigrationContext() uint64 {
+	return o.ConsensusTypeMigrationContextVal
 }
 
 // BatchSize returns the BatchSizeVal
@@ -64,7 +79,7 @@ func (o *Orderer) MaxChannelsCount() uint64 {
 }
 
 // Organizations returns OrganizationsVal
-func (o *Orderer) Organizations() map[string]channelconfig.Org {
+func (o *Orderer) Organizations() map[string]channelconfig.OrdererOrg {
 	return o.OrganizationsVal
 }
 
@@ -86,6 +101,10 @@ type OrdererCapabilities struct {
 
 	// ExpirationVal is returned by ExpirationCheck()
 	ExpirationVal bool
+
+	Kafka2RaftMigVal bool
+
+	UseChannelCreationPolicyAsAdminsVal bool
 }
 
 // Supported returns SupportedErr
@@ -107,4 +126,13 @@ func (oc *OrdererCapabilities) Resubmission() bool {
 // when validating messages
 func (oc *OrdererCapabilities) ExpirationCheck() bool {
 	return oc.ExpirationVal
+}
+
+// Kafka2RaftMigration checks whether the orderer permits a kafka to raft migration.
+func (oc *OrdererCapabilities) Kafka2RaftMigration() bool {
+	return oc.Kafka2RaftMigVal
+}
+
+func (oc *OrdererCapabilities) UseChannelCreationPolicyAsAdmins() bool {
+	return oc.UseChannelCreationPolicyAsAdminsVal
 }

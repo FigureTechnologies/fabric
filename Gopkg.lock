@@ -102,25 +102,6 @@
   revision = "be9bd761db19d4fc551d40be908f02e00487511d"
 
 [[projects]]
-  digest = "1:cffadb7be778996825cde9028332fa925f07f6c487467f7f8ae41e7472bdbfc4"
-  name = "github.com/coreos/etcd"
-  packages = [
-    "pkg/crc",
-    "pkg/fileutil",
-    "pkg/ioutil",
-    "pkg/pbutil",
-    "raft",
-    "raft/raftpb",
-    "snap",
-    "snap/snappb",
-    "wal",
-    "wal/walpb",
-  ]
-  pruneopts = "UT"
-  revision = "fca8add78a9d926166eb739b8e4a124434025ba3"
-  version = "v3.3.9"
-
-[[projects]]
   digest = "1:e3b55611cb86797357cc1cd2b3d38faf07ae3c4079f04b32e84d497422ab0d60"
   name = "github.com/coreos/go-systemd"
   packages = ["journal"]
@@ -196,6 +177,14 @@
   packages = ["ipamutils"]
   pruneopts = "NUT"
   revision = "19279f0492417475b6bfbd0aa529f73e8f178fb5"
+
+[[projects]]
+  digest = "1:b7ffca49e9cfd3dfb04a8e0a59347708c6f78f68476a32c5e0a0edca5d1b258c"
+  name = "github.com/dustin/go-humanize"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "9f541cc9db5d55bce703bd99987c9d5cb8eea45e"
+  version = "v1.0.0"
 
 [[projects]]
   digest = "1:08143362be979b087c2c1bae5dde986e988d3d5d4dc661727cbe436411b3f33a"
@@ -489,7 +478,6 @@
     "format",
     "gbytes",
     "gexec",
-    "ghttp",
     "internal/assertion",
     "internal/asyncassertion",
     "internal/oraclematcher",
@@ -552,12 +540,12 @@
   version = "v2.0.6"
 
 [[projects]]
-  digest = "1:5cf3f025cbee5951a4ee961de067c8a89fc95a5adabead774f82822efabab121"
+  digest = "1:14715f705ff5dfe0ffd6571d7d201dd8e921030f8070321a79380d8ca4ec1a24"
   name = "github.com/pkg/errors"
   packages = ["."]
   pruneopts = "NUT"
-  revision = "645ef00459ed84a119197bfb8d8205042c6df63d"
-  version = "v0.8.0"
+  revision = "ba968bfe8b2f7e042a574c888954fccecfa385b4"
+  version = "v0.8.1"
 
 [[projects]]
   digest = "1:0028cb19b2e4c3112225cd871870f2d9cf49b9b4276531f03438a88e94be86fe"
@@ -689,6 +677,14 @@
 
 [[projects]]
   branch = "master"
+  digest = "1:b9a00fb37a0075071b6787ff0abc4caad3e23b8b0986ca8a0a9f5d1311de06ea"
+  name = "github.com/sykesm/zap-logfmt"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "f9c81d9cb090ad639813e03ea60132bdd515d3f8"
+
+[[projects]]
+  branch = "master"
   digest = "1:f2ffd421680b0a3f7887501b3c6974bcf19217ecd301d0e2c9b681940ec363d5"
   name = "github.com/syndtr/goleveldb"
   packages = [
@@ -727,6 +723,24 @@
   pruneopts = "NUT"
   revision = "e553b05586428962bf7058d1044519d87ca72d74"
   version = "v1.1.9"
+
+[[projects]]
+  digest = "1:7994f0511ea39eb049909df41301aabf5e6289b97c1084f7cc8c351d765469e1"
+  name = "go.etcd.io/etcd"
+  packages = [
+    "etcdserver/api/snap",
+    "etcdserver/api/snap/snappb",
+    "pkg/crc",
+    "pkg/fileutil",
+    "pkg/ioutil",
+    "pkg/pbutil",
+    "raft",
+    "raft/raftpb",
+    "wal",
+    "wal/walpb",
+  ]
+  pruneopts = "UT"
+  revision = "23731bf9ba556867089a9cc8db5e492ca6035fe8"
 
 [[projects]]
   digest = "1:22f696cee54865fb8e9ff91df7b633f6b8f22037a8015253c6b6a71ca82219c7"
@@ -803,14 +817,6 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:e0140c0c868c6e0f01c0380865194592c011fe521d6e12d78bfd33e756fe018a"
-  name = "golang.org/x/sync"
-  packages = ["semaphore"]
-  pruneopts = "NUT"
-  revision = "1d60e4601c6fd243af51cc01ddf169918a5407ca"
-
-[[projects]]
-  branch = "master"
   digest = "1:847ffe30bb2463c17bf12bac2558b63f5dc104fd5920c8adf8c150a08cd176fb"
   name = "golang.org/x/sys"
   packages = [
@@ -883,24 +889,31 @@
   revision = "c7e5094acea1ca1b899e2259d80a6b0f882f81f8"
 
 [[projects]]
-  digest = "1:5b805b8e03b29399b344655cac16873f026e54dc0a7c17b381f6f4d4c7b6d741"
+  digest = "1:8274473795baa9e1fc3b36fae1d8af131a03a7ae2456a8e87a6fda86af019f70"
   name = "google.golang.org/grpc"
   packages = [
     ".",
     "balancer",
     "balancer/base",
     "balancer/roundrobin",
+    "binarylog/grpc_binarylog_v1",
     "codes",
     "connectivity",
     "credentials",
+    "credentials/internal",
     "encoding",
     "encoding/proto",
     "grpclog",
+    "health",
+    "health/grpc_health_v1",
     "internal",
     "internal/backoff",
+    "internal/binarylog",
     "internal/channelz",
     "internal/envconfig",
     "internal/grpcrand",
+    "internal/grpcsync",
+    "internal/syscall",
     "internal/transport",
     "keepalive",
     "metadata",
@@ -914,8 +927,8 @@
     "tap",
   ]
   pruneopts = "NUT"
-  revision = "8dea3dc473e90c8179e519d91302d0597c0ca1d1"
-  version = "v1.15.0"
+  revision = "2fdaae294f38ed9a121193c51ec99fecd3b13eb7"
+  version = "v1.19.0"
 
 [[projects]]
   digest = "1:22b2dee6f30bc8601f087449a2a819df8388e54e9547349c658f14d8f8c590f2"
@@ -1196,11 +1209,6 @@
     "github.com/Knetic/govaluate",
     "github.com/Shopify/sarama",
     "github.com/Shopify/sarama/mocks",
-    "github.com/coreos/etcd/raft",
-    "github.com/coreos/etcd/raft/raftpb",
-    "github.com/coreos/etcd/snap",
-    "github.com/coreos/etcd/wal",
-    "github.com/coreos/etcd/wal/walpb",
     "github.com/davecgh/go-spew/spew",
     "github.com/fsouza/go-dockerclient",
     "github.com/go-kit/kit/metrics",
@@ -1228,7 +1236,7 @@
     "github.com/onsi/gomega",
     "github.com/onsi/gomega/gbytes",
     "github.com/onsi/gomega/gexec",
-    "github.com/onsi/gomega/ghttp",
+    "github.com/onsi/gomega/types",
     "github.com/op/go-logging",
     "github.com/pkg/errors",
     "github.com/prometheus/client_golang/prometheus",
@@ -1240,8 +1248,8 @@
     "github.com/stretchr/testify/assert",
     "github.com/stretchr/testify/mock",
     "github.com/stretchr/testify/require",
+    "github.com/sykesm/zap-logfmt",
     "github.com/syndtr/goleveldb/leveldb",
-    "github.com/syndtr/goleveldb/leveldb/errors",
     "github.com/syndtr/goleveldb/leveldb/iterator",
     "github.com/syndtr/goleveldb/leveldb/opt",
     "github.com/syndtr/goleveldb/leveldb/util",
@@ -1249,6 +1257,12 @@
     "github.com/tedsuo/ifrit/ginkgomon",
     "github.com/tedsuo/ifrit/grouper",
     "github.com/willf/bitset",
+    "go.etcd.io/etcd/etcdserver/api/snap",
+    "go.etcd.io/etcd/pkg/fileutil",
+    "go.etcd.io/etcd/raft",
+    "go.etcd.io/etcd/raft/raftpb",
+    "go.etcd.io/etcd/wal",
+    "go.etcd.io/etcd/wal/walpb",
     "go.uber.org/zap",
     "go.uber.org/zap/buffer",
     "go.uber.org/zap/zapcore",
@@ -1257,15 +1271,17 @@
     "golang.org/x/crypto/sha3",
     "golang.org/x/lint/golint",
     "golang.org/x/net/context",
-    "golang.org/x/sync/semaphore",
     "golang.org/x/tools/cmd/goimports",
     "golang.org/x/tools/go/packages",
     "google.golang.org/grpc",
     "google.golang.org/grpc/balancer",
     "google.golang.org/grpc/balancer/roundrobin",
     "google.golang.org/grpc/codes",
+    "google.golang.org/grpc/connectivity",
     "google.golang.org/grpc/credentials",
     "google.golang.org/grpc/grpclog",
+    "google.golang.org/grpc/health",
+    "google.golang.org/grpc/health/grpc_health_v1",
     "google.golang.org/grpc/keepalive",
     "google.golang.org/grpc/metadata",
     "google.golang.org/grpc/peer",

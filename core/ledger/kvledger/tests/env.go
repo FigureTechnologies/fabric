@@ -14,7 +14,7 @@ import (
 	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/msp/mgmt"
-	"github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protoutil"
 
 	"github.com/hyperledger/fabric/common/ledger/blkstorage/fsblkstorage"
 	"github.com/hyperledger/fabric/common/ledger/util"
@@ -34,7 +34,6 @@ const (
 	rebuildableStatedb       rebuildable = 1
 	rebuildableBlockIndex    rebuildable = 2
 	rebuildableConfigHistory rebuildable = 4
-	rebuildableHistoryDB     rebuildable = 8
 )
 
 var (
@@ -86,40 +85,10 @@ func (e *env) closeAllLedgersAndDrop(flags rebuildable) {
 	}
 }
 
-func (e *env) verifyRebuilablesExist(flags rebuildable) {
-	if flags&rebuildableStatedb == rebuildableBlockIndex {
-		e.verifyNonEmptyDirExists(getBlockIndexDBPath())
-	}
-	if flags&rebuildableBlockIndex == rebuildableStatedb {
-		e.verifyNonEmptyDirExists(getLevelstateDBPath())
-	}
-	if flags&rebuildableConfigHistory == rebuildableConfigHistory {
-		e.verifyNonEmptyDirExists(getConfigHistoryDBPath())
-	}
-}
-
-func (e *env) verifyRebuilableDoesNotExist(flags rebuildable) {
-	if flags&rebuildableStatedb == rebuildableStatedb {
-		e.verifyDirDoesNotExist(getLevelstateDBPath())
-	}
-	if flags&rebuildableStatedb == rebuildableBlockIndex {
-		e.verifyDirDoesNotExist(getBlockIndexDBPath())
-	}
-	if flags&rebuildableConfigHistory == rebuildableConfigHistory {
-		e.verifyDirDoesNotExist(getConfigHistoryDBPath())
-	}
-}
-
 func (e *env) verifyNonEmptyDirExists(path string) {
 	empty, err := util.DirEmpty(path)
 	e.assert.NoError(err)
 	e.assert.False(empty)
-}
-
-func (e *env) verifyDirDoesNotExist(path string) {
-	exists, _, err := util.FileExists(path)
-	e.assert.NoError(err)
-	e.assert.False(exists)
 }
 
 // ########################### ledgermgmt and ledgerconfig related functions wrappers #############################
@@ -149,7 +118,7 @@ func initLedgerMgmt() {
 	)
 }
 
-func createSelfSignedData() common.SignedData {
+func createSelfSignedData() protoutil.SignedData {
 	sID := mgmt.GetLocalSigningIdentityOrPanic()
 	msg := make([]byte, 32)
 	sig, err := sID.Sign(msg)
@@ -160,7 +129,7 @@ func createSelfSignedData() common.SignedData {
 	if err != nil {
 		logger.Panicf("Failed creating self signed data because peer identity couldn't be serialized: %v", err)
 	}
-	return common.SignedData{
+	return protoutil.SignedData{
 		Data:      msg,
 		Signature: sig,
 		Identity:  peerIdentity,

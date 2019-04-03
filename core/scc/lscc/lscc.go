@@ -31,7 +31,7 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	mb "github.com/hyperledger/fabric/protos/msp"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
 
@@ -161,7 +161,7 @@ func (lscc *LifeCycleSysCC) InvokableExternal() bool   { return true }
 func (lscc *LifeCycleSysCC) InvokableCC2CC() bool      { return true }
 func (lscc *LifeCycleSysCC) Enabled() bool             { return true }
 
-func (lscc *LifeCycleSysCC) ChaincodeContainerInfo(chaincodeName string, qe ledger.QueryExecutor) (*ccprovider.ChaincodeContainerInfo, error) {
+func (lscc *LifeCycleSysCC) ChaincodeContainerInfo(channelID, chaincodeName string, qe ledger.SimpleQueryExecutor) (*ccprovider.ChaincodeContainerInfo, error) {
 	chaincodeDataBytes, err := qe.GetState("lscc", chaincodeName)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not retrieve state for chaincode %s", chaincodeName)
@@ -182,7 +182,7 @@ func (lscc *LifeCycleSysCC) ChaincodeContainerInfo(chaincodeName string, qe ledg
 	return ccprovider.DeploymentSpecToChaincodeContainerInfo(cds), nil
 }
 
-func (lscc *LifeCycleSysCC) ChaincodeDefinition(chaincodeName string, qe ledger.QueryExecutor) (ccprovider.ChaincodeDefinition, error) {
+func (lscc *LifeCycleSysCC) ChaincodeDefinition(channelID, chaincodeName string, qe ledger.SimpleQueryExecutor) (ccprovider.ChaincodeDefinition, error) {
 	chaincodeDataBytes, err := qe.GetState("lscc", chaincodeName)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not retrieve state for chaincode %s", chaincodeName)
@@ -199,6 +199,42 @@ func (lscc *LifeCycleSysCC) ChaincodeDefinition(chaincodeName string, qe ledger.
 	}
 
 	return chaincodeData, nil
+}
+
+// ValidationInfo returns name&arguments of the validation plugin for the supplied chaincode.
+// The function returns two types of errors, unexpected errors and validation errors. The
+// reason for this is that this function is to be called from the validation code, which
+// needs to tell apart the two types of error to halt processing on the channel if the
+// unexpected error is not nil and mark the transaction as invalid if the validation error
+// is not nil.
+func (lscc *LifeCycleSysCC) ValidationInfo(channelID, chaincodeName string, qe ledger.SimpleQueryExecutor) (plugin string, args []byte, unexpectedErr error, validationErr error) {
+	chaincodeDataBytes, err := qe.GetState("lscc", chaincodeName)
+	if err != nil {
+		// failure to access the ledger is clearly an unexpected
+		// error since we expect the ledger to be reachable
+		unexpectedErr = errors.Wrapf(err, "could not retrieve state for chaincode %s", chaincodeName)
+		return
+	}
+
+	if chaincodeDataBytes == nil {
+		// no chaincode definition is a validation error since
+		// we're trying to retrieve chaincode definitions for a non-existent chaincode
+		validationErr = errors.Errorf("chaincode %s not found", chaincodeName)
+		return
+	}
+
+	chaincodeData := &ccprovider.ChaincodeData{}
+	err = proto.Unmarshal(chaincodeDataBytes, chaincodeData)
+	if err != nil {
+		// this kind of data corruption is unexpected since our code
+		// always marshals ChaincodeData into these keys
+		unexpectedErr = errors.Wrapf(err, "chaincode %s has bad definition", chaincodeName)
+		return
+	}
+
+	plugin = chaincodeData.Vscc
+	args = chaincodeData.Policy
+	return
 }
 
 //create the chaincode on the given chain
@@ -778,7 +814,7 @@ func (lscc *LifeCycleSysCC) executeUpgrade(stub shim.ChaincodeStubInterface, cha
 	}
 
 	lifecycleEvent := &pb.LifecycleEvent{ChaincodeName: chaincodeName}
-	lifecycleEventBytes := utils.MarshalOrPanic(lifecycleEvent)
+	lifecycleEventBytes := protoutil.MarshalOrPanic(lifecycleEvent)
 	stub.SetEvent(UPGRADE, lifecycleEventBytes)
 	return cdfs, nil
 }
@@ -816,8 +852,8 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 			return shim.Error(InvalidArgsLenErr(len(args)).Error())
 		}
 
-		// 2. check local MSP Admins policy
-		if err = lscc.PolicyChecker.CheckPolicyNoChannel(mgmt.Admins, sp); err != nil {
+		// 2. check install policy
+		if err = lscc.ACLProvider.CheckACL(resources.Lscc_Install, "", sp); err != nil {
 			return shim.Error(fmt.Sprintf("access denied for [%s]: %s", function, err))
 		}
 
@@ -848,6 +884,10 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 			logger.Panicf("programming error, non-existent appplication config for channel '%s'", channel)
 		}
 
+		if ac.Capabilities().LifecycleV20() {
+			return shim.Error(fmt.Sprintf("Channel '%s' has been migrated to the new lifecycle, LSCC is now read-only", channel))
+		}
+
 		// the maximum number of arguments depends on the capability of the channel
 		if !ac.Capabilities().PrivateChannelData() && len(args) > 6 {
 			return shim.Error(PrivateChannelDataNotAvailable("").Error())
@@ -873,7 +913,7 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 			EP = args[3]
 		} else {
 			p := cauthdsl.SignedByAnyMember(peer.GetMSPIDs(channel))
-			EP, err = utils.Marshal(p)
+			EP, err = protoutil.Marshal(p)
 			if err != nil {
 				return shim.Error(err.Error())
 			}
@@ -970,8 +1010,8 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 			return shim.Error(InvalidArgsLenErr(len(args)).Error())
 		}
 
-		// 2. check local MSP Admins policy
-		if err = lscc.PolicyChecker.CheckPolicyNoChannel(mgmt.Admins, sp); err != nil {
+		// 2. check Lscc_GetInstalledChaincodes policy
+		if err = lscc.ACLProvider.CheckACL(resources.Lscc_GetInstalledChaincodes, "", sp); err != nil {
 			return shim.Error(fmt.Sprintf("access denied for [%s]: %s", function, err))
 		}
 

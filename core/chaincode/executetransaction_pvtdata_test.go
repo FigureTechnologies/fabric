@@ -28,7 +28,7 @@ func TestQueriesPrivateData(t *testing.T) {
 	// This test should be moved as an integration test outside of chaincode package.
 	t.Skip()
 	chainID := util.GetTestChainID()
-	_, chaincodeSupport, cleanup, err := initPeer(chainID)
+	_, _, chaincodeSupport, cleanup, err := initPeer(chainID)
 	if err != nil {
 		t.Fail()
 		t.Logf("Error creating peer: %s", err)
@@ -36,7 +36,7 @@ func TestQueriesPrivateData(t *testing.T) {
 
 	defer cleanup()
 
-	url := "github.com/hyperledger/fabric/examples/chaincode/go/map"
+	url := "github.com/hyperledger/fabric/core/chaincode/testdata/src/chaincodes/map"
 	cID := &pb.ChaincodeID{Name: "tmap", Path: url, Version: "0"}
 
 	f := "init"

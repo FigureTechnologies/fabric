@@ -275,13 +275,14 @@ identity ``user1`` from ``wallet``. See how the ``ccp`` has been loaded from
 
 If you'd like to understand more about the structure of a connection profile,
 and how it defines the network, check out
-`the connection profile topic <./developapps/connectionprofile.html>`_. 
+`the connection profile topic <./developapps/connectionprofile.html>`_.
 
 A network can be divided into multiple channels, and the next important line of
 code connects the application to a particular channel within the network,
 ``mychannel``:
 
 .. code:: bash
+
   const network = await gateway.getNetwork('mychannel');
 
   const network = await gateway.getNetwork('mychannel');
@@ -318,6 +319,7 @@ Navigate to the ``chaincode/fabcar/javascript/lib`` subdirectory at the root of
 See how our smart contract is defined using the ``Contract`` class:
 
 .. code:: bash
+  const network = await gateway.getNetwork('mychannel');
 
   class FabCar extends Contract {...
 
@@ -452,7 +454,17 @@ If the invoke is successful, you will see output like this:
 Notice how the ``invoke`` application interacted with the blockchain network
 using the ``submitTransaction`` API, rather than ``evaluateTransaction``.
 
-.. code:: bash
+``submitTransaction`` is much more sophisticated than ``evaluateTransaction``.
+Rather than interacting with a single peer, the SDK will send the
+``submitTransaction`` proposal to every required organization's peer in the
+blockchain network. Each of these peers will execute the requested smart
+contract using this proposal, to generate a transaction response which it signs
+and returns to the SDK. The SDK collects all the signed transaction responses
+into a single transaction, which it then sends to the orderer. The orderer
+collects and sequences transactions from every application into a block of
+transactions. It then distributes these blocks to every peer in the network,
+where every transaction is validated and committed. Finally, the SDK is
+notified, allowing it to return control to the application.
 
   await contract.submitTransaction('createCar', 'CAR12', 'Honda', 'Accord', 'Black', 'Tom');
 
@@ -467,6 +479,13 @@ collects and sequences transactions from every application into a block of
 transactions. It then distributes these blocks to every peer in the network,
 where every transaction is validated and committed. Finally, the SDK is
 notified, allowing it to return control to the application.
+
+.. note:: ``submitTransaction`` also includes a listener that checks to make
+          sure the transaction has been validated and committed to the ledger.
+          Applications should either utilize a commit listener, or
+          leverage an API like ``submitTransaction`` that does this for you.
+          Without doing this, your transaction may not have been successfully
+          orderered, validated, and committed to the ledger.
 
 ``submitTransaction`` does all this for the application! The process by which
 the application, smart contract, peers and ordering service work together to

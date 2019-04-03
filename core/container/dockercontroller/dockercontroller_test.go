@@ -39,7 +39,7 @@ import (
 func TestIntegrationPath(t *testing.T) {
 	coreutil.SetupTestConfig()
 	dc := NewDockerVM("", util.GenerateUUID(), NewBuildMetrics(&disabled.Provider{}))
-	ccid := ccintf.CCID{Name: "simple"}
+	ccid := ccintf.CCID("simple")
 
 	err := dc.Start(ccid, nil, nil, nil, InMemBuilder{})
 	require.NoError(t, err)
@@ -86,10 +86,7 @@ func Test_Start(t *testing.T) {
 	dvm := DockerVM{
 		BuildMetrics: NewBuildMetrics(&disabled.Provider{}),
 	}
-	ccid := ccintf.CCID{
-		Name:    "simple",
-		Version: "1.0",
-	}
+	ccid := ccintf.CCID("simple:1.0")
 	args := make([]string, 1)
 	env := make([]string, 1)
 	files := map[string][]byte{
@@ -123,13 +120,13 @@ func Test_Start(t *testing.T) {
 	gt.Expect(err).To(HaveOccurred())
 	buildErr = false
 
-	chaincodePath := "github.com/hyperledger/fabric/examples/chaincode/go/example01/cmd"
+	chaincodePath := "github.com/hyperledger/fabric/core/container/dockercontroller/testdata/src/chaincodes/noop"
 	spec := &pb.ChaincodeSpec{
 		Type:        pb.ChaincodeSpec_GOLANG,
 		ChaincodeId: &pb.ChaincodeID{Name: "ex01", Path: chaincodePath},
 		Input:       &pb.ChaincodeInput{Args: util.ToChaincodeArgs("f")},
 	}
-	codePackage, err := platforms.NewRegistry(&golang.Platform{}).GetDeploymentPayload(spec.CCType(), spec.Path())
+	codePackage, err := platforms.NewRegistry(&golang.Platform{}).GetDeploymentPayload(spec.Type.String(), spec.ChaincodeId.Path)
 	if err != nil {
 		t.Fatal()
 	}
@@ -137,11 +134,11 @@ func Test_Start(t *testing.T) {
 	bldr := &mockBuilder{
 		buildFunc: func() (io.Reader, error) {
 			return platforms.NewRegistry(&golang.Platform{}).GenerateDockerBuild(
-				cds.CCType(),
-				cds.Path(),
-				cds.Name(),
-				cds.Version(),
-				cds.Bytes(),
+				cds.ChaincodeSpec.Type.String(),
+				cds.ChaincodeSpec.ChaincodeId.Path,
+				cds.ChaincodeSpec.ChaincodeId.Name,
+				cds.ChaincodeSpec.ChaincodeId.Version,
+				cds.CodePackage,
 			)
 		},
 	}
@@ -214,7 +211,7 @@ func Test_streamOutput(t *testing.T) {
 }
 
 func Test_BuildMetric(t *testing.T) {
-	ccid := ccintf.CCID{Name: "simple", Version: "1.0"}
+	ccid := ccintf.CCID("simple:1.0")
 	client := &mockClient{}
 
 	tests := []struct {
@@ -251,7 +248,7 @@ func Test_BuildMetric(t *testing.T) {
 
 func Test_Stop(t *testing.T) {
 	dvm := DockerVM{}
-	ccid := ccintf.CCID{Name: "simple"}
+	ccid := ccintf.CCID("simple")
 
 	// Failure case: getMockClient returns error
 	getClientErr = true
@@ -263,6 +260,32 @@ func Test_Stop(t *testing.T) {
 	// Success case
 	err = dvm.Stop(ccid, 10, true, true)
 	assert.NoError(t, err)
+}
+
+func Test_Wait(t *testing.T) {
+	dvm := DockerVM{}
+
+	// failure to get a client
+	dvm.getClientFnc = func() (dockerClient, error) {
+		return nil, errors.New("gorilla-goo")
+	}
+	_, err := dvm.Wait(ccintf.CCID(""))
+	assert.EqualError(t, err, "gorilla-goo")
+
+	// happy path
+	client := &mockClient{}
+	dvm.getClientFnc = func() (dockerClient, error) { return client, nil }
+
+	client.exitCode = 99
+	exitCode, err := dvm.Wait(ccintf.CCID("the-name:the-version"))
+	assert.NoError(t, err)
+	assert.Equal(t, 99, exitCode)
+	assert.Equal(t, "the-name-the-version", client.containerID)
+
+	// wait fails
+	client.waitErr = errors.New("no-wait-for-you")
+	_, err = dvm.Wait(ccintf.CCID(""))
+	assert.EqualError(t, err, "no-wait-for-you")
 }
 
 func Test_HealthCheck(t *testing.T) {
@@ -300,38 +323,38 @@ func TestGetVMNameForDocker(t *testing.T) {
 		{
 			name:           "mycc",
 			vm:             &DockerVM{NetworkID: "dev", PeerID: "peer0"},
-			ccid:           ccintf.CCID{Name: "mycc", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-peer0-mycc-1.0")))),
+			ccid:           ccintf.CCID("mycc:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-peer0-mycc:1.0")))),
 		},
 		{
 			name:           "mycc-nonetworkid",
 			vm:             &DockerVM{PeerID: "peer1"},
-			ccid:           ccintf.CCID{Name: "mycc", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "peer1-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("peer1-mycc-1.0")))),
+			ccid:           ccintf.CCID("mycc:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "peer1-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("peer1-mycc:1.0")))),
 		},
 		{
 			name:           "myCC-UCids",
 			vm:             &DockerVM{NetworkID: "Dev", PeerID: "Peer0"},
-			ccid:           ccintf.CCID{Name: "myCC", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("Dev-Peer0-myCC-1.0")))),
+			ccid:           ccintf.CCID("myCC:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("Dev-Peer0-myCC:1.0")))),
 		},
 		{
 			name:           "myCC-idsWithSpecialChars",
 			vm:             &DockerVM{NetworkID: "Dev$dev", PeerID: "Peer*0"},
-			ccid:           ccintf.CCID{Name: "myCC", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "dev-dev-peer-0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("Dev$dev-Peer*0-myCC-1.0")))),
+			ccid:           ccintf.CCID("myCC:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "dev-dev-peer-0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("Dev$dev-Peer*0-myCC:1.0")))),
 		},
 		{
 			name:           "mycc-nopeerid",
 			vm:             &DockerVM{NetworkID: "dev"},
-			ccid:           ccintf.CCID{Name: "mycc", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "dev-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-mycc-1.0")))),
+			ccid:           ccintf.CCID("mycc:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "dev-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-mycc:1.0")))),
 		},
 		{
 			name:           "myCC-LCids",
 			vm:             &DockerVM{NetworkID: "dev", PeerID: "peer0"},
-			ccid:           ccintf.CCID{Name: "myCC", Version: "1.0"},
-			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-peer0-myCC-1.0")))),
+			ccid:           ccintf.CCID("myCC:1.0"),
+			expectedOutput: fmt.Sprintf("%s-%s", "dev-peer0-mycc-1.0", hex.EncodeToString(util.ComputeSHA256([]byte("dev-peer0-myCC:1.0")))),
 		},
 	}
 
@@ -348,7 +371,7 @@ func TestGetVMName(t *testing.T) {
 		{
 			name:           "myCC-preserveCase",
 			vm:             &DockerVM{NetworkID: "Dev", PeerID: "Peer0"},
-			ccid:           ccintf.CCID{Name: "myCC", Version: "1.0"},
+			ccid:           ccintf.CCID("myCC:1.0"),
 			expectedOutput: fmt.Sprintf("%s", "Dev-Peer0-myCC-1.0"),
 		},
 	}
@@ -407,6 +430,10 @@ func (m *mockBuilder) Build() (io.Reader, error) {
 type mockClient struct {
 	noSuchImgErrReturned bool
 	pingErr              bool
+
+	containerID string
+	exitCode    int
+	waitErr     error
 
 	attachToContainerStub func(docker.AttachToContainerOptions) error
 }
@@ -489,4 +516,9 @@ func (c *mockClient) PingWithContext(context.Context) error {
 		return errors.New("Error pinging daemon")
 	}
 	return nil
+}
+
+func (c *mockClient) WaitContainer(id string) (int, error) {
+	c.containerID = id
+	return c.exitCode, c.waitErr
 }

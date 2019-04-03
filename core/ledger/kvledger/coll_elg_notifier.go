@@ -20,6 +20,11 @@ type collElgNotifier struct {
 	listeners                     map[string]collElgListener
 }
 
+func (n *collElgNotifier) Initialize(ledgerID string, qe ledger.SimpleQueryExecutor) error {
+	// Noop
+	return nil
+}
+
 // InterestedInNamespaces implements function in interface ledger.StateListener
 func (n *collElgNotifier) InterestedInNamespaces() []string {
 	return n.deployedChaincodeInfoProvider.Namespaces()
@@ -38,7 +43,7 @@ func (n *collElgNotifier) HandleStateUpdates(trigger *ledger.StateUpdateTrigger)
 	qe := trigger.CommittedStateQueryExecutor
 	postCommitQE := trigger.PostCommitQueryExecutor
 
-	stateUpdates := convertToKVWrites(trigger.StateUpdates)
+	stateUpdates := extractPublicUpdates(trigger.StateUpdates)
 	ccLifecycleInfo, err := n.deployedChaincodeInfoProvider.UpdatedChaincodes(stateUpdates)
 	if err != nil {
 		return err
@@ -47,19 +52,19 @@ func (n *collElgNotifier) HandleStateUpdates(trigger *ledger.StateUpdateTrigger)
 	for _, ccInfo := range ccLifecycleInfo {
 		ledgerid := trigger.LedgerID
 		ccName := ccInfo.Name
-		if existingCCInfo, err = n.deployedChaincodeInfoProvider.ChaincodeInfo(ccName, qe); err != nil {
+		if existingCCInfo, err = n.deployedChaincodeInfoProvider.ChaincodeInfo(ledgerid, ccName, qe); err != nil {
 			return err
 		}
 		if existingCCInfo == nil { // not an upgrade transaction
 			continue
 		}
-		if postCommitCCInfo, err = n.deployedChaincodeInfoProvider.ChaincodeInfo(ccName, postCommitQE); err != nil {
+		if postCommitCCInfo, err = n.deployedChaincodeInfoProvider.ChaincodeInfo(ledgerid, ccName, postCommitQE); err != nil {
 			return err
 		}
 		elgEnabledCollNames, err := n.elgEnabledCollNames(
 			ledgerid,
-			existingCCInfo.CollectionConfigPkg,
-			postCommitCCInfo.CollectionConfigPkg,
+			existingCCInfo.ExplicitCollectionConfigPkg,
+			postCommitCCInfo.ExplicitCollectionConfigPkg,
 		)
 		if err != nil {
 			return err
@@ -126,10 +131,10 @@ func (n *collElgNotifier) elgEnabled(ledgerID string, existingPolicy, postCommit
 	return n.membershipInfoProvider.AmMemberOf(ledgerID, postCommitPolicy)
 }
 
-func convertToKVWrites(stateUpdates ledger.StateUpdates) map[string][]*kvrwset.KVWrite {
+func extractPublicUpdates(stateUpdates ledger.StateUpdates) map[string][]*kvrwset.KVWrite {
 	m := map[string][]*kvrwset.KVWrite{}
 	for ns, updates := range stateUpdates {
-		m[ns] = updates.([]*kvrwset.KVWrite)
+		m[ns] = updates.PublicUpdates
 	}
 	return m
 }

@@ -59,7 +59,7 @@ peer:
       leaderAliveThreshold: 10s
       leaderElectionDuration: 5s
     pvtData:
-      pullRetryThreshold: 60s
+      pullRetryThreshold: 15s
       transientstoreMaxBlockRetention: 1000
       pushAckTimeout: 3s
       reconcileBatchSize: 10
@@ -122,6 +122,9 @@ peer:
     authCacheMaxSize: 1000
     authCachePurgeRetentionRatio: 0.75
     orgMembersAllowedAccess: false
+  limits:
+    concurrency:
+      qscc: 500
 
 vm:
   endpoint: unix:///var/run/docker.sock
@@ -145,25 +148,26 @@ vm:
       Memory: 2147483648
 
 chaincode:
-  builder: $(DOCKER_NS)/fabric-ccenv:$(ARCH)-$(PROJECT_VERSION)
+  builder: $(DOCKER_NS)/fabric-ccenv:$(PROJECT_VERSION)
   pull: false
   golang:
-    runtime: $(BASE_DOCKER_NS)/fabric-baseos:$(ARCH)-$(BASE_VERSION)
+    runtime: $(DOCKER_NS)/fabric-baseos:$(PROJECT_VERSION)
     dynamicLink: false
   car:
-    runtime: $(BASE_DOCKER_NS)/fabric-baseos:$(ARCH)-$(BASE_VERSION)
+    runtime: $(DOCKER_NS)/fabric-baseos:$(PROJECT_VERSION)
   java:
-    runtime: $(DOCKER_NS)/fabric-javaenv:$(ARCH)-$(PROJECT_VERSION)
+    runtime: $(DOCKER_NS)/fabric-javaenv:latest
   node:
-      runtime: $(BASE_DOCKER_NS)/fabric-baseimage:$(ARCH)-$(BASE_VERSION)
+    runtime: $(DOCKER_NS)/fabric-nodeenv:latest
   startuptimeout: 300s
   executetimeout: 30s
   mode: net
   keepalive: 0
   system:
-    cscc: enable
-    lscc: enable
-    qscc: enable
+    _lifecycle: enable
+    cscc:       enable
+    lscc:       enable
+    qscc:       enable
   systemPlugins:
   logging:
     level:  info

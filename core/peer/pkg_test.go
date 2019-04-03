@@ -21,7 +21,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/core/comm"
-	testpb "github.com/hyperledger/fabric/core/comm/testdata/grpc"
+	"github.com/hyperledger/fabric/core/comm/testpb"
+	"github.com/hyperledger/fabric/core/ledger/mock"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/msp"
@@ -168,7 +169,7 @@ func TestUpdateRootsFromConfigBlock(t *testing.T) {
 		viper.Set("peer.tls.key.file", filepath.Join("testdata", "Org1-server1-key.pem"))
 		viper.Set("peer.tls.rootcert.file", filepath.Join("testdata", "Org1-cert.pem"))
 		viper.Set("peer.fileSystemPath", testDir)
-		err = peer.Default.CreateChainFromBlock(block, nil, nil)
+		err = peer.Default.CreateChainFromBlock(block, nil, &mock.DeployedChaincodeInfoProvider{}, nil, nil)
 		if err != nil {
 			t.Fatalf("Failed to create config block (%s)", err)
 		}
@@ -311,11 +312,6 @@ func TestUpdateRootsFromConfigBlock(t *testing.T) {
 
 				// creating channel should update the trusted client roots
 				test.createChannel()
-
-				// make sure we have the expected number of CAs
-				appCAs, ordererCAs := comm.GetCredentialSupport().GetClientRootCAs()
-				assert.Equal(t, test.numAppCAs, len(appCAs), "Did not find expected number of app CAs for channel")
-				assert.Equal(t, test.numOrdererCAs, len(ordererCAs), "Did not find expected number of orderer CAs for channel")
 
 				// invoke the EmptyCall service with good options
 				_, err = invokeEmptyCall(testAddress, test.goodOptions)

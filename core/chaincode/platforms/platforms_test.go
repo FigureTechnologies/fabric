@@ -75,8 +75,8 @@ var _ = Describe("Platforms", func() {
 				md, err := registry.GetMetadataProvider("fakeType", []byte("code-package"))
 				Expect(md).To(BeNil())
 				Expect(err).NotTo(HaveOccurred())
-				Expect(fakePlatform.GetMetadataProviderCallCount()).To(Equal(1))
-				Expect(fakePlatform.GetMetadataProviderArgsForCall(0)).To(Equal([]byte("code-package")))
+				Expect(fakePlatform.GetMetadataAsTarEntriesCallCount()).To(Equal(1))
+				Expect(fakePlatform.GetMetadataAsTarEntriesArgsForCall(0)).To(Equal([]byte("code-package")))
 			})
 
 			Context("when the platform is unknown", func() {
@@ -117,9 +117,8 @@ var _ = Describe("Platforms", func() {
 LABEL org.hyperledger.fabric.chaincode.id.name="cc-name" \
       org.hyperledger.fabric.chaincode.id.version="cc-version" \
       org.hyperledger.fabric.chaincode.type="fakeType" \
-      org.hyperledger.fabric.version="%s" \
-      org.hyperledger.fabric.base.version="%s"
-ENV CORE_CHAINCODE_BUILDLEVEL=%s`, metadata.Version, metadata.BaseVersion, metadata.Version)
+      org.hyperledger.fabric.version="%s"
+ENV CORE_CHAINCODE_BUILDLEVEL=%s`, metadata.Version, metadata.Version)
 			Expect(df).To(Equal(expectedDockerfile))
 		})
 

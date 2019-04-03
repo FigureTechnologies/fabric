@@ -43,9 +43,13 @@ type Capabilities interface {
 	//  - new chaincode lifecycle, as described in FAB-11237
 	V1_3Validation() bool
 
-	// MetadataLifecycle indicates whether the peer should use the deprecated and problematic
-	// v1.0/v1.1 lifecycle, or whether it should use the newer per channel peer local chaincode
-	// metadata package approach planned for release with Fabric v1.2
+	// V2_0Validation returns true if this channel supports transaction validation
+	// as introduced in v2.0. This includes:
+	//  - new chaincode lifecycle
+	//  - implicit per-org collections
+	V2_0Validation() bool
+
+	// MetadataLifecycle is an obsolete capability but left so as not to break the interface
 	MetadataLifecycle() bool
 
 	// KeyLevelEndorsement returns true if this channel supports endorsement

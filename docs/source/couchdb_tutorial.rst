@@ -6,6 +6,13 @@ This tutorial will describe the steps required to use the CouchDB as the state
 database with Hyperledger Fabric. By now, you should be familiar with Fabric
 concepts and have explored some of the samples and tutorials.
 
+.. note:: The Fabric chaincode lifecycle that is being introduced as an Alpha
+          feature in Fabric v2.0 does not support using indexes with CouchDB. As
+          a result, this tutorial requires the `previous lifecycle process <https://hyperledger-fabric.readthedocs.io/en/release-1.4/chaincode4noah.html>`_ to
+          install and instantiate a chaincode that includes CouchDB indexes.
+          Download the `release-1.4 version of the Fabric Samples <https://github.com/hyperledger/fabric-samples/tree/release-1.4/>`_ to
+          use this tutorial. For more information, see :ref:`cdb-add-index`.
+
 The tutorial will take you through the following steps:
 
 #. :ref:`cdb-enable-couch`
@@ -13,6 +20,7 @@ The tutorial will take you through the following steps:
 #. :ref:`cdb-add-index`
 #. :ref:`cdb-install-instantiate`
 #. :ref:`cdb-query`
+#. :ref:`cdb-best`
 #. :ref:`cdb-pagination`
 #. :ref:`cdb-update-index`
 #. :ref:`cdb-delete-index`
@@ -246,13 +254,13 @@ deployment by being placed alongside it in the appropriate metadata folder.
 If your chaincode installation and instantiation uses the Hyperledger
 Fabric Node SDK, the JSON index files can be located in any folder as long
 as it conforms to this `directory structure <https://fabric-sdk-node.github.io/tutorial-metadata-chaincode.html>`__.
-During the chaincode installation using the client.installChaincode() API,
+During the chaincode installation using the ``client.installChaincode()`` API,
 include the attribute (``metadataPath``) in the `installation request <https://fabric-sdk-node.github.io/global.html#ChaincodeInstallRequest>`__.
 The value of the metadataPath is a string representing the absolute path to the
 directory structure containing the JSON index file(s).
 
 Alternatively, if you are using the
-:doc:`peer-commands` to install and instantiate the chaincode, then the JSON
+:doc:`commands/peercommand` command to install and instantiate the chaincode, then the JSON
 index files must be located under the path ``META-INF/statedb/couchdb/indexes``
 which is located inside the directory where the chaincode resides.
 
@@ -264,11 +272,25 @@ is packaged with the chaincode which will be installed using the peer commands.
   :align: center
   :alt: Marbles Chaincode Index Package
 
+This sample includes one index named indexOwnerDoc:
+
+.. code:: json
+
+  {"index":{"fields":["docType","owner"]},"ddoc":"indexOwnerDoc", "name":"indexOwner","type":"json"}
+
 
 Start the network
 -----------------
 
- :guilabel:`Try it yourself`
+.. note:: The following tutorial needs to be run using the
+          `release-1.4 version of the Fabric Samples <https://github.com/hyperledger/fabric-samples/tree/release-1.4/>`__.
+          If you have already downloaded release-2.0 of the Fabric Samples, you
+          can use the `git checkout` to download `release-1.4`. Navigate to the
+          `fabric-samples` directory on your local machine. Then run the command
+          `git checkout v1.4.0`.
+
+
+:guilabel:`Try it yourself`
 
  Before installing and instantiating the marbles chaincode, we need to start
  up the BYFN network. For the sake of this tutorial, we want to operate
@@ -305,7 +327,7 @@ channel. In the previous section, we demonstrated how to package the chaincode
 so they should be ready for deployment.
 
 Chaincode is installed onto a peer and then instantiated onto the channel using
-:doc:`peer-commands`.
+:doc:`commands/peercommand`.
 
 
 1. Use the `peer chaincode install <http://hyperledger-fabric.readthedocs.io/en/master/commands/peerchaincode.html?%20chaincode%20instantiate#peer-chaincode-install>`__ command to install the Marbles chaincode on a peer.
@@ -325,7 +347,7 @@ Chaincode is installed onto a peer and then instantiated onto the channel using
 
  .. code:: bash
 
-      peer chaincode install -n marbles -v 1.0 -p github.com/chaincode/marbles02/go
+      peer chaincode install -n marbles -v 1.0 -p github.com/hyperledger/fabric-samples/chaincode/marbles02/go
 
 2. Issue the `peer chaincode instantiate <http://hyperledger-fabric.readthedocs.io/en/master/commands/peerchaincode.html?%20chaincode%20instantiate#peer-chaincode-instantiate>`__ command to instantiate the
 chaincode on a channel.
@@ -452,6 +474,7 @@ by "tom" using the ``queryMarbles`` function.
 Delving into the query command above, there are three arguments of interest:
 
 *  ``queryMarbles``
+
   Name of the function in the Marbles chaincode. Notice a `shim <https://godoc.org/github.com/hyperledger/fabric/core/chaincode/shim>`__
   ``shim.ChaincodeStubInterface`` is used to access and modify the ledger. The
   ``getQueryResultForQueryString()`` passes the queryString to the shim API ``getQueryResult()``.
@@ -476,11 +499,13 @@ Delving into the query command above, there are three arguments of interest:
   }
 
 *  ``{"selector":{"docType":"marble","owner":"tom"}``
+
   This is an example of an **ad hoc selector** string which finds all documents
   of type ``marble`` where the ``owner`` attribute has a value of ``tom``.
 
 
 *  ``"use_index":["_design/indexOwnerDoc", "indexOwner"]``
+
   Specifies both the design doc name  ``indexOwnerDoc`` and index name
   ``indexOwner``. In this example the selector query explicitly includes the
   index name, specified by using the ``use_index`` keyword. Recalling the
@@ -496,8 +521,123 @@ The query runs successfully and the index is leveraged with the following result
 
   Query Result: [{"Key":"marble1", "Record":{"color":"blue","docType":"marble","name":"marble1","owner":"tom","size":35}}]
 
-.. _cdb-pagination:
+.. _cdb-best:
 
+Use best practices for queries and indexes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Queries that use indexes will complete faster, without having to scan the full
+database in couchDB. Understanding indexes will allow you to write your queries
+for better performance and help your application handle larger amounts
+of data or blocks on your network.
+
+It is also important to plan the indexes you install with your chaincode. You
+should install only a few indexes per chaincode that support most of your queries.
+Adding too many indexes, or using an excessive number of fields in an index, will
+degrade the performance of your network. This is because the indexes are updated 
+after each block is committed. The more indexes need to be updated through
+"index warming", the longer it will take for transactions to complete.
+
+The examples in this section will help demonstrate how queries use indexes and
+what type of queries will have the best performance. Remember the following
+when writing your queries:
+
+* All fields in the index must also be in the selector or sort sections of your query
+  for the index to be used.
+* More complex queries will have a lower performance and will be less likely to
+  use an index.
+* You should try to avoid operators that will result in a full table scan or a
+  full index scan such as ``$or``, ``$in`` and ``$regex``.
+
+In the previous section of this tutorial, you issued the following query against
+the marbles chaincode:
+
+.. code:: bash
+
+  // Example one: query fully supported by the index
+  peer chaincode query -C $CHANNEL_NAME -n marbles -c '{"Args":["queryMarbles", "{\"selector\":{\"docType\":\"marble\",\"owner\":\"tom\"}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+The marbles chaincode was installed with the ``indexOwnerDoc`` index:
+
+.. code:: json
+
+  {"index":{"fields":["docType","owner"]},"ddoc":"indexOwnerDoc", "name":"indexOwner","type":"json"}
+
+Notice that both the fields in the query, ``docType`` and ``owner``, are
+included in the index, making it a fully supported query. As a result this
+query will be able to use the data in the index, without having to search the
+full database. Fully supported queries such as this one will return faster than
+other queries from your chaincode.
+
+If you add extra fields to the query above, it will still use the index.
+However, the query will additionally have to scan the indexed data for the
+extra fields, resulting in a longer response time. As an example, the query
+below will still use the index, but will take a longer time to return than the
+previous example.
+
+.. code:: bash
+
+  // Example two: query fully supported by the index with additional data
+  peer chaincode query -C $CHANNEL_NAME -n marbles -c '{"Args":["queryMarbles", "{\"selector\":{\"docType\":\"marble\",\"owner\":\"tom\",\"color\":\"red\"}, \"use_index\":[\"/indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+A query that does not include all fields in the index will have to scan the full
+database instead. For example, the query below searches for the owner, without
+specifying the the type of item owned. Since the ownerIndexDoc contains both
+the ``owner`` and ``docType`` fields, this query will not be able to use the
+index.
+
+.. code:: bash
+
+  // Example three: query not supported by the index
+  peer chaincode query -C $CHANNEL_NAME -n marbles -c '{"Args":["queryMarbles", "{\"selector\":{\"owner\":\"tom\"}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+In general, more complex queries will have a longer response time, and have a
+lower chance of being supported by an index. Operators such as ``$or``, ``$in``,
+and ``$regex`` will often cause the query to scan the full index or not use the
+index at all.
+
+As an example, the query below contains an ``$or`` term that will search for every
+marble and every item owned by tom.
+
+.. code:: bash
+
+  // Example four: query with $or supported by the index
+  peer chaincode query -C $CHANNEL_NAME -n marbles -c '{"Args":["queryMarbles", "{\"selector\":{"\$or\":[{\"docType\:\"marble\"},{\"owner\":\"tom\"}]}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+This query will still use the index because it searches for fields that are
+included in ``indexOwnerDoc``. However, the ``$or`` condition in the query
+requires a scan of all the items in the index, resulting in a longer response
+time.
+
+Below is an example of a complex query that is not supported by the index.
+
+.. code:: bash
+
+  // Example five: Query with $or not supported by the index
+  peer chaincode query -C $CHANNEL_NAME -n marbles -c '{"Args":["queryMarbles", "{\"selector\":{"\$or\":[{\"docType\":\"marble\",\"owner\":\"tom\"},{"\color\":"\yellow\"}]}, \"use_index\":[\"indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+The query searches for all marbles owned by tom or any other items that are
+yellow. This query will not use the index because it will need to search the
+entire table to meet the ``$or`` condition. Depending the amount of data on your
+ledger, this query will take a long time to respond or may timeout.
+
+While it is important to follow best practices with your queries, using indexes
+is not a solution for collecting large amounts of data. The blockchain data
+structure is optimized to validate and confirm transactions, and is not suited
+for data analytics or reporting. If you want to build a dashboard as part
+of your application or analyze the data from your network, the best practice is
+to query an off chain database that replicates the data from your peers. This
+will allow you to understand the data on the blockchain without degrading the
+performance of your network or disrupting transactions.
+
+You can use block or chaincode events from your application to write transaction
+data to an off-chain database or analytics engine. For each block received, the block
+listener application would iterate through the block transactions and build a data
+store using the key/value writes from each valid transaction's ``rwset``. The
+:doc:`peer_event_services` provide replayable events to ensure the integrity of 
+downstream data stores.
+
+.. _cdb-pagination:
 
 Query the CouchDB State Database With Pagination
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -543,10 +683,11 @@ specifies the number of records to return per query.  The ``bookmark`` is an
 a unique bookmark.)
 
 *  ``queryMarblesWithPagination``
+
   Name of the function in the Marbles chaincode. Notice a `shim <https://godoc.org/github.com/hyperledger/fabric/core/chaincode/shim>`__
   ``shim.ChaincodeStubInterface`` is used to access and modify the ledger. The
   ``getQueryResultForQueryStringWithPagination()`` passes the queryString along
-    with the pagesize and bookmark to the shim API ``GetQueryResultWithPagination()``.
+  with the pagesize and bookmark to the shim API ``GetQueryResultWithPagination()``.
 
 .. code:: bash
 

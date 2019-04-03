@@ -12,12 +12,11 @@ import (
 	"math"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
 	pb "github.com/hyperledger/fabric/protos/peer"
+	tk "github.com/hyperledger/fabric/token"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
@@ -51,21 +50,21 @@ type deliverClient struct {
 	conn               *grpc.ClientConn
 }
 
-func NewDeliverClient(config *ClientConfig) (DeliverClient, error) {
-	grpcClient, err := createGrpcClient(&config.CommitPeerCfg, config.TlsEnabled)
+func NewDeliverClient(config *ConnectionConfig) (DeliverClient, error) {
+	grpcClient, err := CreateGRPCClient(config)
 	if err != nil {
-		err = errors.WithMessage(err, fmt.Sprintf("failed to create a GRPCClient to peer %s", config.CommitPeerCfg.Address))
+		err = errors.WithMessage(err, fmt.Sprintf("failed to create a GRPCClient to peer %s", config.Address))
 		logger.Errorf("%s", err)
 		return nil, err
 	}
-	conn, err := grpcClient.NewConnection(config.CommitPeerCfg.Address, config.CommitPeerCfg.ServerNameOverride)
+	conn, err := grpcClient.NewConnection(config.Address, config.ServerNameOverride)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("failed to connect to commit peer %s", config.CommitPeerCfg.Address))
+		return nil, errors.WithMessage(err, fmt.Sprintf("failed to connect to commit peer %s", config.Address))
 	}
 
 	return &deliverClient{
-		peerAddr:           config.CommitPeerCfg.Address,
-		serverNameOverride: config.CommitPeerCfg.ServerNameOverride,
+		peerAddr:           config.Address,
+		serverNameOverride: config.ServerNameOverride,
 		grpcClient:         grpcClient,
 		conn:               conn,
 	}, nil
@@ -100,17 +99,11 @@ func (d *deliverClient) Certificate() *tls.Certificate {
 }
 
 // create a signed envelope with SeekPosition_Newest for block
-func CreateDeliverEnvelope(channelId string, creator []byte, signer SignerIdentity, cert *tls.Certificate) (*common.Envelope, error) {
-	var tlsCertHash []byte
-	var err error
+func CreateDeliverEnvelope(channelId string, creator []byte, signingIdentity tk.SigningIdentity, cert *tls.Certificate) (*common.Envelope, error) {
 	// check for client certificate and compute SHA2-256 on certificate if present
-	if cert != nil && len(cert.Certificate) > 0 {
-		tlsCertHash, err = factory.GetDefault().Hash(cert.Certificate[0], &bccsp.SHA256Opts{})
-		if err != nil {
-			err = errors.New("failed to compute SHA256 on client certificate")
-			logger.Errorf("%s", err)
-			return nil, err
-		}
+	tlsCertHash, err := GetTLSCertHash(cert)
+	if err != nil {
+		return nil, err
 	}
 
 	_, header, err := CreateHeader(common.HeaderType_DELIVER_SEEK_INFO, channelId, creator, tlsCertHash)
@@ -143,7 +136,7 @@ func CreateDeliverEnvelope(channelId string, creator []byte, signer SignerIdenti
 		return nil, errors.Wrap(err, "error marshaling SeekInfo")
 	}
 
-	envelope, err := CreateEnvelope(raw, header, signer)
+	envelope, err := CreateEnvelope(raw, header, signingIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +153,7 @@ func DeliverSend(df DeliverFiltered, address string, envelope *common.Envelope) 
 	return nil
 }
 
-func DeliverReceive(df DeliverFiltered, address string, txid string, eventCh chan TxEvent) error {
+func DeliverReceive(df DeliverFiltered, address string, txid string, eventCh chan<- TxEvent) error {
 	event := TxEvent{
 		Txid:       txid,
 		Committed:  false,
@@ -213,7 +206,7 @@ read:
 // DeliverWaitForResponse waits for either eventChan has value (i.e., response has been received) or ctx is timed out
 // This function assumes that the eventCh is only for the specified txid
 // If an eventCh is shared by multiple transactions, a loop should be used to listen to events from multiple transactions
-func DeliverWaitForResponse(ctx context.Context, eventCh chan TxEvent, txid string) (bool, error) {
+func DeliverWaitForResponse(ctx context.Context, eventCh <-chan TxEvent, txid string) (bool, error) {
 	select {
 	case event, _ := <-eventCh:
 		if txid == event.Txid {

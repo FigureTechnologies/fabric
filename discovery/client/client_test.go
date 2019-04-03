@@ -29,11 +29,12 @@ import (
 	"github.com/hyperledger/fabric/gossip/api"
 	gossipcommon "github.com/hyperledger/fabric/gossip/common"
 	gdisc "github.com/hyperledger/fabric/gossip/discovery"
+	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/discovery"
 	"github.com/hyperledger/fabric/protos/gossip"
 	"github.com/hyperledger/fabric/protos/msp"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -140,7 +141,7 @@ var (
 		newPeer(4, stateInfoMessageWithHeight(101, cc3), propertiesWithChaincodes).NetworkMember,
 		newPeer(5, stateInfoMessageWithHeight(108, cc3), propertiesWithChaincodes).NetworkMember,
 		newPeer(6, stateInfoMessageWithHeight(110, cc3), propertiesWithChaincodes).NetworkMember,
-		newPeer(7, stateInfoMessageWithHeight(111, cc3), propertiesWithChaincodes).NetworkMember,
+		newPeer(7, stateInfoMessageWithHeight(110, cc3), propertiesWithChaincodes).NetworkMember,
 		newPeer(8, stateInfoMessageWithHeight(100, cc3), propertiesWithChaincodes).NetworkMember,
 		newPeer(9, stateInfoMessageWithHeight(107, cc3), propertiesWithChaincodes).NetworkMember,
 		newPeer(10, stateInfoMessageWithHeight(110, cc3), propertiesWithChaincodes).NetworkMember,
@@ -506,16 +507,14 @@ func TestClient(t *testing.T) {
 		mychannel := r.ForChannel("mychannel")
 
 		// acceptablePeers are the ones at the highest ledger height for each org
-		acceptablePeers := []string{"p5", "p7", "p9", "p11", "p15"}
+		acceptablePeers := []string{"p5", "p9", "p11", "p15"}
 		used := make(map[string]struct{})
-		for i := 0; i < 10; i++ {
-			endorsers, err := mychannel.Endorsers(ccCall("mycc3"), NewFilter(PrioritiesByHeight, NoExclusion))
-			assert.NoError(t, err)
-			names := getNames(endorsers)
-			assert.Subset(t, acceptablePeers, names)
-			for _, name := range names {
-				used[name] = struct{}{}
-			}
+		endorsers, err := mychannel.Endorsers(ccCall("mycc3"), NewFilter(PrioritiesByHeight, NoExclusion))
+		assert.NoError(t, err)
+		names := getNames(endorsers)
+		assert.Subset(t, acceptablePeers, names)
+		for _, name := range names {
+			used[name] = struct{}{}
 		}
 		assert.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
 	})
@@ -532,7 +531,7 @@ func TestClient(t *testing.T) {
 		acceptablePeers := []string{"p1", "p9", "p3", "p5", "p6", "p7", "p10", "p11", "p12", "p14", "p15"}
 		used := make(map[string]struct{})
 
-		for i := 0; i < 30; i++ {
+		for i := 0; i < 90; i++ {
 			endorsers, err := mychannel.Endorsers(ccCall("mycc3"), &ledgerHeightFilter{threshold: threshold})
 			assert.NoError(t, err)
 			names := getNames(endorsers)
@@ -544,16 +543,14 @@ func TestClient(t *testing.T) {
 		assert.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
 
 		threshold = 0 // only use the peers at the highest ledger height (same as using the PrioritiesByHeight selector)
-		acceptablePeers = []string{"p5", "p7", "p9", "p11", "p15"}
+		acceptablePeers = []string{"p5", "p9", "p11", "p15"}
 		used = make(map[string]struct{})
-		for i := 0; i < 10; i++ {
-			endorsers, err := mychannel.Endorsers(ccCall("mycc3"), &ledgerHeightFilter{threshold: threshold})
-			assert.NoError(t, err)
-			names := getNames(endorsers)
-			assert.Subset(t, acceptablePeers, names)
-			for _, name := range names {
-				used[name] = struct{}{}
-			}
+		endorsers, err := mychannel.Endorsers(ccCall("mycc3"), &ledgerHeightFilter{threshold: threshold})
+		assert.NoError(t, err)
+		names := getNames(endorsers)
+		assert.Subset(t, acceptablePeers, names)
+		for _, name := range names {
+			used[name] = struct{}{}
 		}
 		t.Logf("Used peers: %#v\n", used)
 		assert.Equalf(t, len(acceptablePeers), len(used), "expecting each endorser to be returned at least once")
@@ -716,7 +713,7 @@ func TestAddEndorsersQueryInvalidInput(t *testing.T) {
 
 func TestValidateAliveMessage(t *testing.T) {
 	am := aliveMessage(1)
-	msg, _ := am.ToGossipMessage()
+	msg, _ := protoext.EnvelopeToGossipMessage(am)
 
 	// Scenario I: Valid alive message
 	assert.NoError(t, validateAliveMessage(msg))
@@ -840,7 +837,7 @@ type inquireablePolicy struct {
 func (ip *inquireablePolicy) appendPrincipal(orgName string) {
 	ip.principals = append(ip.principals, &msp.MSPPrincipal{
 		PrincipalClassification: msp.MSPPrincipal_ROLE,
-		Principal:               utils.MarshalOrPanic(&msp.MSPRole{Role: msp.MSPRole_MEMBER, MspIdentifier: orgName})})
+		Principal:               protoutil.MarshalOrPanic(&msp.MSPRole{Role: msp.MSPRole_MEMBER, MspIdentifier: orgName})})
 }
 
 func (ip *inquireablePolicy) SatisfiedBy() []policies.PrincipalSet {
@@ -889,7 +886,7 @@ func aliveMessage(id int) *gossip.Envelope {
 			},
 		},
 	}
-	sMsg, _ := g.NoopSign()
+	sMsg, _ := protoext.NoopSign(g)
 	return sMsg.Envelope
 }
 
@@ -912,7 +909,7 @@ func stateInfoMessageWithHeight(ledgerHeight uint64, chaincodes ...*gossip.Chain
 			},
 		},
 	}
-	sMsg, _ := g.NoopSign()
+	sMsg, _ := protoext.NoopSign(g)
 	return sMsg.Envelope
 }
 
@@ -967,7 +964,7 @@ func (ms *mockSupport) PeersAuthorizedByCriteria(channel gossipcommon.ChainID, i
 	return ms.endorsementAnalyzer.PeersAuthorizedByCriteria(channel, interest)
 }
 
-func (*mockSupport) EligibleForService(channel string, data common.SignedData) error {
+func (*mockSupport) EligibleForService(channel string, data protoutil.SignedData) error {
 	return nil
 }
 
@@ -1059,13 +1056,13 @@ func buildCollectionConfig(col2principals map[string][]*msp.MSPPrincipal) []byte
 			},
 		})
 	}
-	return utils.MarshalOrPanic(collections)
+	return protoutil.MarshalOrPanic(collections)
 }
 
 func memberPrincipal(mspID string) *msp.MSPPrincipal {
 	return &msp.MSPPrincipal{
 		PrincipalClassification: msp.MSPPrincipal_ROLE,
-		Principal: utils.MarshalOrPanic(&msp.MSPRole{
+		Principal: protoutil.MarshalOrPanic(&msp.MSPRole{
 			MspIdentifier: mspID,
 			Role:          msp.MSPRole_MEMBER,
 		}),

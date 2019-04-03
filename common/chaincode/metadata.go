@@ -9,14 +9,21 @@ package chaincode
 import (
 	"sync"
 
+	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/protos/gossip"
 )
 
 // InstalledChaincode defines metadata about an installed chaincode
 type InstalledChaincode struct {
+	PackageID persistence.PackageID
+	Hash      []byte
+	Label     string
+
+	// FIXME: we should remove these two
+	// fields since they are not properties
+	// of the chaincode (FAB-14561)
 	Name    string
 	Version string
-	Id      []byte
 }
 
 // Metadata defines channel-scoped metadata of a chaincode

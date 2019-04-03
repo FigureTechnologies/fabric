@@ -18,6 +18,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/chaincode"
 	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
 	pb "github.com/hyperledger/fabric/protos/peer"
@@ -36,9 +37,6 @@ var chaincodeInstallPath string
 type CCPackage interface {
 	//InitFromBuffer initialize the package from bytes
 	InitFromBuffer(buf []byte) (*ChaincodeData, error)
-
-	// InitFromFS gets the chaincode from the filesystem (includes the raw bytes too)
-	InitFromFS(ccname string, ccversion string) ([]byte, *pb.ChaincodeDeploymentSpec, error)
 
 	// PutChaincodeToFS writes the chaincode to the filesystem
 	PutChaincodeToFS() error
@@ -79,10 +77,6 @@ func SetChaincodesPath(path string) {
 	}
 
 	chaincodeInstallPath = path
-}
-
-func GetChaincodePackage(ccname string, ccversion string) ([]byte, error) {
-	return GetChaincodePackageFromPath(ccname, ccversion, chaincodeInstallPath)
 }
 
 // isPrintable is used by CDSPackage and SignedCDSPackage validation to
@@ -137,7 +131,7 @@ func (cifs *CCInfoFSImpl) GetChaincodeCodePackage(ccname, ccversion string) ([]b
 	if err != nil {
 		return nil, err
 	}
-	return ccpack.GetDepSpec().Bytes(), nil
+	return ccpack.GetDepSpec().CodePackage, nil
 }
 
 // GetChaincodeFromPath this is a wrapper for hiding package implementation.
@@ -218,7 +212,7 @@ func (cifs *CCInfoFSImpl) ListInstalledChaincodes(dir string, ls DirEnumerator, 
 		chaincodes = append(chaincodes, chaincode.InstalledChaincode{
 			Name:    ccName,
 			Version: ccVersion,
-			Id:      ccPackage.GetId(),
+			Hash:    ccPackage.GetId(),
 		})
 	}
 	ccproviderLogger.Debug("Returning", chaincodes)
@@ -346,8 +340,7 @@ func GetInstalledChaincodes() (*pb.ChaincodeQueryResponse, error) {
 			ccpack, err := GetChaincodeFromFS(ccname, ccversion)
 			if err != nil {
 				// either chaincode on filesystem has been tampered with or
-				// a non-chaincode file has been found in the chaincodes directory
-				ccproviderLogger.Errorf("Unreadable chaincode file found on filesystem: %s", file.Name())
+				// _lifecycle chaincode files exist in the chaincodes directory.
 				continue
 			}
 
@@ -386,11 +379,13 @@ type CCContext struct {
 
 	// Version used to construct the chaincode image and register
 	Version string
-}
 
-// GetCanonicalName returns the canonical name associated with the proposal context
-func (cccid *CCContext) GetCanonicalName() string {
-	return cccid.Name + ":" + cccid.Version
+	// ID the identifier for this chaincode (for now, the hash of the package)
+	ID []byte
+
+	// InitRequired indicates whether the chaincode must have 'Init' invoked
+	// before other transactions can proceed.
+	InitRequired bool
 }
 
 //-------- ChaincodeDefinition - interface for ChaincodeData ------
@@ -415,6 +410,9 @@ type ChaincodeDefinition interface {
 	// Endorsement returns how to endorse proposals for this chaincode.
 	// The string returns is the name of the endorsement method (usually 'escc').
 	Endorsement() string
+
+	// RequiresInit indicates whether or not we must enforce Init exactly once semantics
+	RequiresInit() bool
 }
 
 //-------- ChaincodeData is stored on the LSCC -------
@@ -478,6 +476,11 @@ func (cd *ChaincodeData) Endorsement() string {
 	return cd.Escc
 }
 
+// RequiresInit always returns true as this is the legacy form of chaincode.
+func (cd *ChaincodeData) RequiresInit() bool {
+	return true
+}
+
 // implement functions needed from proto.Message for proto's mar/unmarshal functions
 
 // Reset resets
@@ -491,14 +494,17 @@ func (*ChaincodeData) ProtoMessage() {}
 
 // ChaincodeContainerInfo is yet another synonym for the data required to start/stop a chaincode.
 type ChaincodeContainerInfo struct {
-	Name        string
-	Version     string
-	Path        string
-	Type        string
-	CodePackage []byte
+	PackageID persistence.PackageID
+	Path      string
+	Type      string
 
 	// ContainerType is not a great name, but 'DOCKER' and 'SYSTEM' are the valid types
 	ContainerType string
+
+	// FIXME: Name and Version fields must disappear from this struct
+	// because they are *NOT* a property of the chaincode container (FAB-14561)
+	Name    string
+	Version string
 }
 
 // TransactionParams are parameters which are tied to a particular transaction
@@ -506,6 +512,7 @@ type ChaincodeContainerInfo struct {
 type TransactionParams struct {
 	TxID                 string
 	ChannelID            string
+	NamespaceID          string
 	SignedProp           *pb.SignedProposal
 	Proposal             *pb.Proposal
 	TXSimulator          ledger.TxSimulator
@@ -522,8 +529,6 @@ type TransactionParams struct {
 // chaincode package without importing it; more methods
 // should be added below if necessary
 type ChaincodeProvider interface {
-	// Execute executes a standard chaincode invocation for a chaincode and an input
-	Execute(txParams *TransactionParams, cccid *CCContext, input *pb.ChaincodeInput) (*pb.Response, *pb.ChaincodeEvent, error)
 	// ExecuteLegacyInit is a special case for executing chaincode deployment specs,
 	// which are not already in the LSCC, needed for old lifecycle
 	ExecuteLegacyInit(txParams *TransactionParams, cccid *CCContext, spec *pb.ChaincodeDeploymentSpec) (*pb.Response, *pb.ChaincodeEvent, error)
@@ -533,10 +538,11 @@ type ChaincodeProvider interface {
 
 func DeploymentSpecToChaincodeContainerInfo(cds *pb.ChaincodeDeploymentSpec) *ChaincodeContainerInfo {
 	return &ChaincodeContainerInfo{
-		Name:          cds.Name(),
-		Version:       cds.Version(),
-		Path:          cds.Path(),
-		Type:          cds.CCType(),
+		Name:          cds.ChaincodeSpec.ChaincodeId.Name,
+		Version:       cds.ChaincodeSpec.ChaincodeId.Version,
+		Path:          cds.ChaincodeSpec.ChaincodeId.Path,
+		Type:          cds.ChaincodeSpec.Type.String(),
 		ContainerType: cds.ExecEnv.String(),
+		PackageID:     persistence.PackageID(cds.ChaincodeSpec.ChaincodeId.Name + ":" + cds.ChaincodeSpec.ChaincodeId.Version),
 	}
 }

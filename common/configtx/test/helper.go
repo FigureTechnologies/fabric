@@ -10,15 +10,15 @@ import (
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/genesis"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/configtxgentest"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/encoder"
-	genesisconfig "github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/core/ledger/util"
+	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
+	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
+	genesisconfig "github.com/hyperledger/fabric/internal/configtxgen/localconfig"
 	cb "github.com/hyperledger/fabric/protos/common"
 	mspproto "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protos/peer"
 	pb "github.com/hyperledger/fabric/protos/peer"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 )
 
 var logger = flogging.MustGetLogger("common.configtx.test")
@@ -31,9 +31,9 @@ func MakeGenesisBlock(chainID string) (*cb.Block, error) {
 		logger.Panicf("Error creating channel config: %s", err)
 	}
 
-	gb, err := genesis.NewFactoryImpl(channelGroup).Block(chainID)
-	if err != nil || gb == nil {
-		return gb, err
+	gb := genesis.NewFactoryImpl(channelGroup).Block(chainID)
+	if gb == nil {
+		return gb, nil
 	}
 
 	txsFilter := util.NewTxValidationFlagsSetValue(len(gb.Data.Data), peer.TxValidationCode_VALID)
@@ -51,26 +51,26 @@ func MakeGenesisBlockFromMSPs(chainID string, appMSPConf, ordererMSPConf *msppro
 		logger.Panicf("Error creating channel config: %s", err)
 	}
 
-	ordererOrg := cb.NewConfigGroup()
+	ordererOrg := protoutil.NewConfigGroup()
 	ordererOrg.ModPolicy = channelconfig.AdminsPolicyKey
 	ordererOrg.Values[channelconfig.MSPKey] = &cb.ConfigValue{
-		Value:     utils.MarshalOrPanic(channelconfig.MSPValue(ordererMSPConf).Value()),
+		Value:     protoutil.MarshalOrPanic(channelconfig.MSPValue(ordererMSPConf).Value()),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
-	applicationOrg := cb.NewConfigGroup()
+	applicationOrg := protoutil.NewConfigGroup()
 	applicationOrg.ModPolicy = channelconfig.AdminsPolicyKey
 	applicationOrg.Values[channelconfig.MSPKey] = &cb.ConfigValue{
-		Value:     utils.MarshalOrPanic(channelconfig.MSPValue(appMSPConf).Value()),
+		Value:     protoutil.MarshalOrPanic(channelconfig.MSPValue(appMSPConf).Value()),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 	applicationOrg.Values[channelconfig.AnchorPeersKey] = &cb.ConfigValue{
-		Value:     utils.MarshalOrPanic(channelconfig.AnchorPeersValue([]*pb.AnchorPeer{}).Value()),
+		Value:     protoutil.MarshalOrPanic(channelconfig.AnchorPeersValue([]*pb.AnchorPeer{}).Value()),
 		ModPolicy: channelconfig.AdminsPolicyKey,
 	}
 
 	channelGroup.Groups[channelconfig.OrdererGroupKey].Groups[ordererOrgID] = ordererOrg
 	channelGroup.Groups[channelconfig.ApplicationGroupKey].Groups[appOrgID] = applicationOrg
 
-	return genesis.NewFactoryImpl(channelGroup).Block(chainID)
+	return genesis.NewFactoryImpl(channelGroup).Block(chainID), nil
 }

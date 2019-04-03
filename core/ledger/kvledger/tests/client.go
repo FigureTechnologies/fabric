@@ -14,6 +14,8 @@ import (
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,12 +24,13 @@ import (
 // In a test, for each instantiated ledger, a single instance of a client is typically sufficient.
 type client struct {
 	lgr            ledger.PeerLedger
+	lgrID          string
 	simulatedTrans []*txAndPvtdata // accumulates the results of transactions simulations
 	assert         *assert.Assertions
 }
 
-func newClient(lgr ledger.PeerLedger, t *testing.T) *client {
-	return &client{lgr, nil, assert.New(t)}
+func newClient(lgr ledger.PeerLedger, lgrID string, t *testing.T) *client {
+	return &client{lgr, lgrID, nil, assert.New(t)}
 }
 
 // simulateDataTx takes a simulation logic and wraps it between
@@ -43,6 +46,27 @@ func (c *client) simulateDataTx(txid string, simulationLogic func(s *simulator))
 	sim := &simulator{ledgerSimulator, txid, c.assert}
 	simulationLogic(sim)
 	txAndPvtdata := sim.done()
+	c.simulatedTrans = append(c.simulatedTrans, txAndPvtdata)
+	return txAndPvtdata
+}
+
+func (c *client) addPostOrderTx(txid string, customTxType common.HeaderType) *txAndPvtdata {
+	if txid == "" {
+		txid = util.GenerateUUID()
+	}
+	channelHeader := protoutil.MakeChannelHeader(customTxType, 0, c.lgrID, 0)
+	channelHeader.TxId = txid
+	paylBytes := protoutil.MarshalOrPanic(
+		&common.Payload{
+			Header: protoutil.MakePayloadHeader(channelHeader, &common.SignatureHeader{}),
+			Data:   nil,
+		},
+	)
+	env := &common.Envelope{
+		Payload:   paylBytes,
+		Signature: nil,
+	}
+	txAndPvtdata := &txAndPvtdata{Txid: txid, Envelope: env}
 	c.simulatedTrans = append(c.simulatedTrans, txAndPvtdata)
 	return txAndPvtdata
 }
@@ -89,26 +113,9 @@ func (s *simulator) setState(ns, key string, val string) {
 	)
 }
 
-func (s *simulator) delState(ns, key string) {
-	s.assert.NoError(
-		s.DeleteState(ns, key),
-	)
-}
-
-func (s *simulator) getPvtdata(ns, coll, key string) {
-	_, err := s.GetPrivateData(ns, coll, key)
-	s.assert.NoError(err)
-}
-
 func (s *simulator) setPvtdata(ns, coll, key string, val string) {
 	s.assert.NoError(
 		s.SetPrivateData(ns, coll, key, []byte(val)),
-	)
-}
-
-func (s *simulator) delPvtdata(ns, coll, key string) {
-	s.assert.NoError(
-		s.DeletePrivateData(ns, coll, key),
 	)
 }
 

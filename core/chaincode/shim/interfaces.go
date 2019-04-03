@@ -239,6 +239,10 @@ type ChaincodeStubInterface interface {
 	// that has not been committed.
 	GetPrivateData(collection, key string) ([]byte, error)
 
+	// GetPrivateDataHash returns the hash of the value of the specified `key` from the specified
+	// `collection`
+	GetPrivateDataHash(collection, key string) ([]byte, error)
+
 	// PutPrivateData puts the specified `key` and `value` into the transaction's
 	// private writeset. Note that only hash of the private writeset goes into the
 	// transaction proposal response (which is sent to the client who issued the
@@ -250,8 +254,8 @@ type ChaincodeStubInterface interface {
 	// prefixed with 0x00 as composite key namespace.
 	PutPrivateData(collection string, key string, value []byte) error
 
-	// DelState records the specified `key` to be deleted in the private writeset of
-	// the transaction. Note that only hash of the private writeset goes into the
+	// DelPrivateData records the specified `key` to be deleted in the private writeset
+	// of the transaction. Note that only hash of the private writeset goes into the
 	// transaction proposal response (which is sent to the client who issued the
 	// transaction) and the actual private writeset gets temporarily stored in a
 	// transient store. The `key` and its value will be deleted from the collection
@@ -299,7 +303,7 @@ type ChaincodeStubInterface interface {
 	// not detected. That is, other committed transactions may have added,
 	// updated, or removed keys that impact the result set, and this would not
 	// be detected at validation/commit time.  Applications susceptible to this
-	// should therefore not use GetQueryResult as part of transactions that update
+	// should therefore not use GetPrivateDataQueryResult as part of transactions that update
 	// ledger, and should limit use to read-only chaincode operations.
 	GetPrivateDataQueryResult(collection, query string) (StateQueryIteratorInterface, error)
 

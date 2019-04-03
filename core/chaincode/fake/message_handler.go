@@ -2,10 +2,10 @@
 package fake
 
 import (
-	sync "sync"
+	"sync"
 
-	chaincode "github.com/hyperledger/fabric/core/chaincode"
-	peer "github.com/hyperledger/fabric/protos/peer"
+	"github.com/hyperledger/fabric/core/chaincode"
+	"github.com/hyperledger/fabric/protos/peer"
 )
 
 type MessageHandler struct {

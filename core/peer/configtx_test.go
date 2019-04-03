@@ -19,17 +19,17 @@ import (
 	"github.com/hyperledger/fabric/common/channelconfig"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/configtxgentest"
-	"github.com/hyperledger/fabric/common/tools/configtxgen/encoder"
-	genesisconfig "github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/customtx"
 	"github.com/hyperledger/fabric/core/ledger/ledgermgmt"
+	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
+	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
+	genesisconfig "github.com/hyperledger/fabric/internal/configtxgen/localconfig"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	ordererconfig "github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/hyperledger/fabric/protoutil"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,9 +141,9 @@ func TestCustomTxProcessors(t *testing.T) {
 	defer ledgermgmt.CleanupTestEnv()
 
 	processor := customtx.GetProcessor(common.HeaderType_CONFIG)
-	assert.NotNil(t, processor)
+	assert.Equal(t, processor, configTxProcessor)
 	processor = customtx.GetProcessor(common.HeaderType_TOKEN_TRANSACTION)
-	assert.NotNil(t, processor)
+	assert.Equal(t, processor, tokenTxProcessor)
 }
 
 type testHelper struct {
@@ -166,7 +166,7 @@ func (h *testHelper) sampleChannelConfig(sequence uint64, enableV11Capability bo
 }
 
 func (h *testHelper) constructConfigTx(t *testing.T, txType common.HeaderType, chainid string, config *common.Config) *common.Envelope {
-	env, err := utils.CreateSignedEnvelope(txType, chainid, nil, &common.ConfigEnvelope{Config: config}, 0, 0)
+	env, err := protoutil.CreateSignedEnvelope(txType, chainid, nil, &common.ConfigEnvelope{Config: config}, 0, 0)
 	assert.NoError(t, err)
 	return env
 }
@@ -176,7 +176,7 @@ func (h *testHelper) constructGenesisTx(t *testing.T, chainid string, chanConf *
 		Config:     chanConf,
 		LastUpdate: h.constructLastUpdateField(chainid),
 	}
-	txEnvelope, err := utils.CreateSignedEnvelope(common.HeaderType_CONFIG, chainid, nil, configEnvelop, 0, 0)
+	txEnvelope, err := protoutil.CreateSignedEnvelope(common.HeaderType_CONFIG, chainid, nil, configEnvelop, 0, 0)
 	assert.NoError(t, err)
 	return txEnvelope
 }
@@ -186,10 +186,10 @@ func (h *testHelper) constructBlock(txEnvelope *common.Envelope, blockNum uint64
 }
 
 func (h *testHelper) constructLastUpdateField(chainid string) *common.Envelope {
-	configUpdate := utils.MarshalOrPanic(&common.ConfigUpdate{
+	configUpdate := protoutil.MarshalOrPanic(&common.ConfigUpdate{
 		ChannelId: chainid,
 	})
-	envelopeForLastUpdateField, _ := utils.CreateSignedEnvelope(common.HeaderType_CONFIG_UPDATE, chainid, nil, &common.ConfigUpdateEnvelope{ConfigUpdate: configUpdate}, 0, 0)
+	envelopeForLastUpdateField, _ := protoutil.CreateSignedEnvelope(common.HeaderType_CONFIG_UPDATE, chainid, nil, &common.ConfigUpdateEnvelope{ConfigUpdate: configUpdate}, 0, 0)
 	return envelopeForLastUpdateField
 }
 

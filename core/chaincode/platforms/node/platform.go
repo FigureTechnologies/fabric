@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/ccmetadata"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/util"
 	cutil "github.com/hyperledger/fabric/core/container/util"
@@ -191,6 +190,7 @@ func (nodePlatform *Platform) GenerateDockerBuild(path string, code []byte, tw *
 	codepackage := bytes.NewReader(code)
 	binpackage := bytes.NewBuffer(nil)
 	err := util.DockerBuild(util.DockerBuildOptions{
+		Image:        cutil.GetDockerfileFromConfig("chaincode.node.runtime"),
 		Cmd:          fmt.Sprint("cp -R /chaincode/input/src/. /chaincode/output && cd /chaincode/output && npm install --production"),
 		InputStream:  codepackage,
 		OutputStream: binpackage,
@@ -202,7 +202,8 @@ func (nodePlatform *Platform) GenerateDockerBuild(path string, code []byte, tw *
 	return cutil.WriteBytesToPackage("binpackage.tar", binpackage.Bytes(), tw)
 }
 
-//GetMetadataProvider fetches metadata provider given deployment spec
-func (nodePlatform *Platform) GetMetadataProvider(code []byte) platforms.MetadataProvider {
-	return &ccmetadata.TargzMetadataProvider{Code: code}
+// GetMetadataProvider fetches metadata provider given deployment spec
+func (nodePlatform *Platform) GetMetadataAsTarEntries(code []byte) ([]byte, error) {
+	metadataProvider := &ccmetadata.TargzMetadataProvider{Code: code}
+	return metadataProvider.GetMetadataAsTarEntries()
 }

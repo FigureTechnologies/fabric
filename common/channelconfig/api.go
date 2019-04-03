@@ -34,6 +34,14 @@ type ApplicationOrg interface {
 	AnchorPeers() []*pb.AnchorPeer
 }
 
+// OrdererOrg stores the per org orderer config.
+type OrdererOrg interface {
+	Org
+
+	// Endpoints returns the endpoints of orderer nodes.
+	Endpoints() []string
+}
+
 // Application stores the common shared application config
 type Application interface {
 	// Organizations returns a map of org ID to ApplicationOrg
@@ -86,6 +94,12 @@ type Orderer interface {
 	// ConsensusMetadata returns the metadata associated with the consensus type.
 	ConsensusMetadata() []byte
 
+	// ConsensusMigrationState returns the consensus-type migration state.
+	ConsensusMigrationState() ab.ConsensusType_MigrationState
+
+	// ConsensusMigrationContext returns the consensus-type migration context.
+	ConsensusMigrationContext() uint64
+
 	// BatchSize returns the maximum number of messages to include in a block
 	BatchSize() *ab.BatchSize
 
@@ -101,7 +115,7 @@ type Orderer interface {
 	KafkaBrokers() []string
 
 	// Organizations returns the organizations for the ordering service
-	Organizations() map[string]Org
+	Organizations() map[string]OrdererOrg
 
 	// Capabilities defines the capabilities for the orderer portion of a channel
 	Capabilities() OrdererCapabilities
@@ -115,6 +129,9 @@ type ChannelCapabilities interface {
 	// MSPVersion specifies the version of the MSP this channel must understand, including the MSP types
 	// and MSP principal types.
 	MSPVersion() msp.MSPVersion
+
+	// ConsensusTypeMigration return true if consensus-type migration is permitted in both orderer and peer.
+	ConsensusTypeMigration() bool
 }
 
 // ApplicationCapabilities defines the capabilities for the application portion of a channel
@@ -152,9 +169,19 @@ type ApplicationCapabilities interface {
 	//  - new chaincode lifecycle, as described in FAB-11237
 	V1_3Validation() bool
 
-	// MetadataLifecycle indicates whether the peer should use the deprecated and problematic
-	// v1.0/v1.1 lifecycle, or whether it should use the newer per channel peer local chaincode
-	// metadata package approach planned for release with Fabric v1.2
+	// V2_0Validation returns true if this channel supports transaction validation
+	// as introduced in v2.0. This includes:
+	//  - new chaincode lifecycle
+	//  - implicit per-org collections
+	V2_0Validation() bool
+
+	// LifecycleV20 indicates whether the peer should use the deprecated and problematic
+	// v1.x lifecycle, or whether it should use the newer per channel approve/commit definitions
+	// process introduced in v2.0.  Note, this should only be used on the endorsing side
+	// of peer processing, so that we may safely remove all checks against it in v2.1.
+	LifecycleV20() bool
+
+	// MetadataLifecycle always returns false
 	MetadataLifecycle() bool
 
 	// KeyLevelEndorsement returns true if this channel supports endorsement
@@ -181,6 +208,14 @@ type OrdererCapabilities interface {
 	// ExpirationCheck specifies whether the orderer checks for identity expiration checks
 	// when validating messages
 	ExpirationCheck() bool
+
+	// Kafka2RaftMigration checks whether the orderer permits a Kafka to Raft migration.
+	Kafka2RaftMigration() bool
+
+	// UseChannelCreationPolicyAsAdmins checks whether the orderer should use more sophisticated
+	// channel creation logic using channel creation policy as the Admins policy if
+	// the creation transaction appears to support it.
+	UseChannelCreationPolicyAsAdmins() bool
 }
 
 // PolicyMapper is an interface for
