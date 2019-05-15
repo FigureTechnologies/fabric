@@ -53,9 +53,9 @@ noverify = [
   name = "k8s.io/client-go"
   version = "~8.0.0"
 
-[[constraint]]
-  branch = "master"
-  name = "github.com/golang/groupcache"
+#[[constraint]]
+#  branch = "master"
+#  name = "github.com/golang/groupcache"
 
 [[constraint]]
   name = "github.com/golang/protobuf"
@@ -68,6 +68,10 @@ noverify = [
 [[constraint]]
   name = "github.com/hashicorp/go-version"
   version = "1.0.0"
+
+[[constraint]]
+  name = "github.com/hashicorp/vault"
+  version = "1.1.2"
 
 [[constraint]]
   branch = "master"
