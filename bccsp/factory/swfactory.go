@@ -54,6 +54,12 @@ func (f *SWFactory) Get(config *FactoryOpts) (bccsp.BCCSP, error) {
 		ks = fks
 	} else if swOpts.InmemKeystore != nil {
 		ks = sw.NewInMemoryKeyStore()
+	} else if swOpts.VaultKeyStore != nil {
+		vks, err := sw.NewVaultKeyStore(nil, swOpts.VaultKeyStore)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to initialize vault key store")
+		}
+		ks = vks
 	} else {
 		// Default to ephemeral key store
 		ks = sw.NewDummyKeyStore()
@@ -73,6 +79,7 @@ type SwOpts struct {
 	FileKeystore  *FileKeystoreOpts  `mapstructure:"filekeystore,omitempty" json:"filekeystore,omitempty" yaml:"FileKeyStore"`
 	DummyKeystore *DummyKeystoreOpts `mapstructure:"dummykeystore,omitempty" json:"dummykeystore,omitempty"`
 	InmemKeystore *InmemKeystoreOpts `mapstructure:"inmemkeystore,omitempty" json:"inmemkeystore,omitempty"`
+	VaultKeyStore *sw.VaultOptions   `mapstructure:"vaultkeystore,omitempty" json:"vaultkeystore,omitempty" yaml:"VaultKeyStore"`
 }
 
 // Pluggable Keystores, could add JKS, P12, etc..
