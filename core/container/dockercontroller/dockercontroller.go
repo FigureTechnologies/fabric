@@ -100,24 +100,19 @@ func (p *Provider) NewVM() container.VM {
 	// At this point check to see if we are in kubernetes
 	if !kubernetescontroller.InCluster() {
 		dockerLogger.Info("Kubernetes not detected.")
-		return NewDockerVM(p.PeerID, p.NetworkID, p.BuildMetrics)
+		return &DockerVM{
+			PeerID:        p.PeerID,
+			NetworkID:     p.NetworkID,
+			Client:        p.Client,
+			BuildMetrics:  p.BuildMetrics,
+			AttachStdOut:  p.AttachStdOut,
+			HostConfig:    p.HostConfig,
+			ChaincodePull: p.ChaincodePull,
+		}
 	}
 	// In a cluster so replace the docker connection with a kubernetes one.
 	dockerLogger.Info("Kubernetes environment detected. Using K8s API.")
 	return kubernetescontroller.NewKubernetesAPI(p.PeerID, p.NetworkID)
-}
-
-// NewDockerVM returns a new DockerVM instance
-func NewDockerVM(peerID, networkID string, buildMetrics *BuildMetrics) *DockerVM {
-	return &DockerVM{
-		PeerID:        p.PeerID,
-		NetworkID:     p.NetworkID,
-		Client:        p.Client,
-		BuildMetrics:  p.BuildMetrics,
-		AttachStdOut:  p.AttachStdOut,
-		HostConfig:    p.HostConfig,
-		ChaincodePull: p.ChaincodePull,
-	}
 }
 
 func (vm *DockerVM) createContainer(imageID, containerID string, args, env []string) error {
