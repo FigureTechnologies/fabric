@@ -8,6 +8,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/hyperledger/fabric/common/chaincode"
 	"github.com/hyperledger/fabric/common/channelconfig"
@@ -26,36 +27,41 @@ import (
 )
 
 const (
-	// LifecycleNamespace is the namespace in the statedb where lifecycle information is stored
+	// LifecycleNamespace is the namespace in the statedb where lifecycle
+	// information is stored
 	LifecycleNamespace = "_lifecycle"
 
-	//InstalledChaincodeFuncName is the chaincode function name used to install a chaincode
+	// InstallChaincodeFuncName is the chaincode function name used to install
+	// a chaincode
 	InstallChaincodeFuncName = "InstallChaincode"
 
-	// QueryInstalledChaincodeFuncName is the chaincode function name used to query an installed chaincode
+	// QueryInstalledChaincodeFuncName is the chaincode function name used to
+	// query an installed chaincode
 	QueryInstalledChaincodeFuncName = "QueryInstalledChaincode"
 
-	// QueryInstalledChaincodesFuncName is the chaincode function name used to query all installed chaincodes
+	// QueryInstalledChaincodesFuncName is the chaincode function name used to
+	// query all installed chaincodes
 	QueryInstalledChaincodesFuncName = "QueryInstalledChaincodes"
 
-	// DefineForMyOrgFuncName is the chaincode function name used to approve a chaincode definition for
-	// execution by the user's own org
+	// ApproveChaincodeDefinitionForMyOrgFuncName is the chaincode function name
+	// used to approve a chaincode definition for execution by the user's own org
 	ApproveChaincodeDefinitionForMyOrgFuncName = "ApproveChaincodeDefinitionForMyOrg"
 
-	// QueryApprovalStatusFuncName is the chaincode function name used to query the approval status for a given
-	// definition over a given set of orgs
+	// QueryApprovalStatusFuncName is the chaincode function name used to query
+	// the approval status for a given definition over a given set of orgs
 	QueryApprovalStatusFuncName = "QueryApprovalStatus"
 
-	// CommitChaincodeDefinitionFuncName is the chaincode function name used to 'define' (previously 'instantiate')
-	// a chaincode in a channel.
+	// CommitChaincodeDefinitionFuncName is the chaincode function name used to
+	// 'commit' (previously 'instantiate') a chaincode in a channel.
 	CommitChaincodeDefinitionFuncName = "CommitChaincodeDefinition"
 
-	// QueryChaincodeDefinitionFuncName is the chaincode function name used to 'define' (previously 'instantiate')
-	// a chaincode in a channel.
+	// QueryChaincodeDefinitionFuncName is the chaincode function name used to
+	// query the committed chaincode definitions in a channel.
 	QueryChaincodeDefinitionFuncName = "QueryChaincodeDefinition"
 
-	// QueryNamespaceDefinitions is the chaincode function name used query which namespaces are currently defined
-	// and what type those namespaces are.
+	// QueryNamespaceDefinitionsFuncName is the chaincode function name used
+	// to query which namespaces are currently defined and what type those
+	// namespaces are.
 	QueryNamespaceDefinitionsFuncName = "QueryNamespaceDefinitions"
 )
 
@@ -226,8 +232,8 @@ type Invocation struct {
 	SCC               *SCC
 }
 
-// InstallChaincode is a SCC function that may be dispatched to which routes to the underlying
-// lifecycle implementation.
+// InstallChaincode is a SCC function that may be dispatched to which routes
+// to the underlying lifecycle implementation.
 func (i *Invocation) InstallChaincode(input *lb.InstallChaincodeArgs) (proto.Message, error) {
 
 	if logger.IsEnabledFor(zapcore.DebugLevel) {
@@ -257,8 +263,8 @@ func (i *Invocation) InstallChaincode(input *lb.InstallChaincodeArgs) (proto.Mes
 	}, nil
 }
 
-// QueryInstalledChaincode is a SCC function that may be dispatched to which routes to the underlying
-// lifecycle implementation.
+// QueryInstalledChaincode is a SCC function that may be dispatched to which
+// routes to the underlying lifecycle implementation.
 func (i *Invocation) QueryInstalledChaincode(input *lb.QueryInstalledChaincodeArgs) (proto.Message, error) {
 
 	logger.Debugf("received invocation of QueryInstalledChaincode for install package ID '%s'",
@@ -276,8 +282,8 @@ func (i *Invocation) QueryInstalledChaincode(input *lb.QueryInstalledChaincodeAr
 	}, nil
 }
 
-// QueryInstalledChaincodes is a SCC function that may be dispatch to which routes to the underlying
-// lifecycle implementation.
+// QueryInstalledChaincodes is a SCC function that may be dispatched to which
+// routes to the underlying lifecycle implementation.
 func (i *Invocation) QueryInstalledChaincodes(input *lb.QueryInstalledChaincodesArgs) (proto.Message, error) {
 
 	logger.Debugf("received invocation of QueryInstalledChaincodes")
@@ -299,9 +305,13 @@ func (i *Invocation) QueryInstalledChaincodes(input *lb.QueryInstalledChaincodes
 	return result, nil
 }
 
-// ApproveChaincodeDefinitionForMyOrg is a SCC function that may be dispatched to which routes to the underlying
-// lifecycle implementation
+// ApproveChaincodeDefinitionForMyOrg is a SCC function that may be dispatched
+// to which routes to the underlying lifecycle implementation.
 func (i *Invocation) ApproveChaincodeDefinitionForMyOrg(input *lb.ApproveChaincodeDefinitionForMyOrgArgs) (proto.Message, error) {
+	if err := validateInput(input.Name, input.Version, input.Collections); err != nil {
+		return nil, err
+	}
+
 	collectionName := ImplicitCollectionNameForOrg(i.SCC.OrgMSPID)
 	var collectionConfig []*cb.CollectionConfig
 	if input.Collections != nil {
@@ -413,7 +423,13 @@ func (i *Invocation) QueryApprovalStatus(input *lb.QueryApprovalStatusArgs) (pro
 	}, nil
 }
 
+// CommitChaincodeDefinition is a SCC function that may be dispatched
+// to which routes to the underlying lifecycle implementation.
 func (i *Invocation) CommitChaincodeDefinition(input *lb.CommitChaincodeDefinitionArgs) (proto.Message, error) {
+	if err := validateInput(input.Name, input.Version, input.Collections); err != nil {
+		return nil, err
+	}
+
 	if i.ApplicationConfig == nil {
 		return nil, errors.Errorf("no application config for channel '%s'", i.Stub.GetChannelID())
 	}
@@ -473,8 +489,9 @@ func (i *Invocation) CommitChaincodeDefinition(input *lb.CommitChaincodeDefiniti
 	return &lb.CommitChaincodeDefinitionResult{}, nil
 }
 
+// QueryChaincodeDefinition is a SCC function that may be dispatched
+// to which routes to the underlying lifecycle implementation.
 func (i *Invocation) QueryChaincodeDefinition(input *lb.QueryChaincodeDefinitionArgs) (proto.Message, error) {
-
 	logger.Debugf("received invocation of QueryChaincodeDefinition on channel '%s' for chaincode '%s'",
 		i.Stub.GetChannelID(),
 		input.Name,
@@ -496,6 +513,8 @@ func (i *Invocation) QueryChaincodeDefinition(input *lb.QueryChaincodeDefinition
 	}, nil
 }
 
+// QueryNamespaceDefinitions is a SCC function that may be dispatched
+// to which routes to the underlying lifecycle implementation.
 func (i *Invocation) QueryNamespaceDefinitions(input *lb.QueryNamespaceDefinitionsArgs) (proto.Message, error) {
 
 	logger.Debugf("received invocation of QueryNamespaceDefinitions on channel '%s'",
@@ -515,4 +534,55 @@ func (i *Invocation) QueryNamespaceDefinitions(input *lb.QueryNamespaceDefinitio
 	return &lb.QueryNamespaceDefinitionsResult{
 		Namespaces: result,
 	}, nil
+}
+
+var (
+	// NOTE the chaincode name/version regular expressions should stay in sync
+	// with those defined in core/scc/lscc/lscc.go until LSCC has been removed.
+	ChaincodeNameRegExp    = regexp.MustCompile("^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)*$")
+	ChaincodeVersionRegExp = regexp.MustCompile("^[A-Za-z0-9_.+-]+$")
+
+	collectionNameRegExp = regexp.MustCompile("^[A-Za-z0-9-]+([A-Za-z0-9_-]+)*$")
+
+	// currently defined system chaincode names that shouldn't
+	// be allowed as user-defined chaincode names
+	systemChaincodeNames = map[string]struct{}{
+		"cscc": {},
+		"escc": {},
+		"lscc": {},
+		"qscc": {},
+		"vscc": {},
+	}
+)
+
+func validateInput(name, version string, collections *cb.CollectionConfigPackage) error {
+	if !ChaincodeNameRegExp.MatchString(name) {
+		return errors.Errorf("invalid chaincode name '%s'. Names can only consist of alphanumerics, '_', and '-' and cannot begin with '_'", name)
+	}
+	if _, ok := systemChaincodeNames[name]; ok {
+		return errors.Errorf("chaincode name '%s' is the name of a system chaincode", name)
+	}
+
+	if !ChaincodeVersionRegExp.MatchString(version) {
+		return errors.Errorf("invalid chaincode version '%s'. Versions can only consist of alphanumerics, '_', '-', '+', and '.'", version)
+	}
+
+	if collections == nil {
+		return nil
+	}
+
+	for _, c := range collections.Config {
+		switch t := c.Payload.(type) {
+		case *cb.CollectionConfig_StaticCollectionConfig:
+			if !collectionNameRegExp.MatchString(t.StaticCollectionConfig.Name) {
+				return errors.Errorf("invalid collection name '%s'. Names can only consist of alphanumerics, '_', and '-' and cannot begin with '_'", t.StaticCollectionConfig.Name)
+			}
+		default:
+			// this should only occur if a developer has added a new
+			// collection config type
+			return errors.Errorf("collection config contains unexpected payload type: %T", t)
+		}
+	}
+
+	return nil
 }

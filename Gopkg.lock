@@ -471,13 +471,15 @@
   revision = "a3b6351eb1ff8e1bfa30b2f55d7e282186ed8fee"
 
 [[projects]]
-  digest = "1:96e6ef9d01992a41bca9f7b94bd56c18b62ed979f37c20bb704ee5ffff2ebeca"
+  digest = "1:9f353a779b8b118229dfc1541e41d72d1a3a6f2d13756f5fe66daeb0f52191ab"
   name = "github.com/onsi/gomega"
   packages = [
     ".",
     "format",
     "gbytes",
     "gexec",
+    "gstruct",
+    "gstruct/errors",
     "internal/assertion",
     "internal/asyncassertion",
     "internal/oraclematcher",
@@ -490,8 +492,8 @@
     "types",
   ]
   pruneopts = "NT"
-  revision = "7615b9433f86a8bdf29709bf288bc4fd0636a369"
-  version = "v1.4.2"
+  revision = "90e289841c1ed79b7a598a7cd9959750cb5e89e2"
+  version = "v1.5.0"
 
 [[projects]]
   branch = "master"
@@ -889,7 +891,7 @@
   revision = "c7e5094acea1ca1b899e2259d80a6b0f882f81f8"
 
 [[projects]]
-  digest = "1:8274473795baa9e1fc3b36fae1d8af131a03a7ae2456a8e87a6fda86af019f70"
+  digest = "1:6afefb3e487fbe8a9db2a4bb81cedd7670423bbfea6f82b67b44e9ea3131f502"
   name = "google.golang.org/grpc"
   packages = [
     ".",
@@ -908,6 +910,7 @@
     "health/grpc_health_v1",
     "internal",
     "internal/backoff",
+    "internal/balancerload",
     "internal/binarylog",
     "internal/channelz",
     "internal/envconfig",
@@ -927,8 +930,8 @@
     "tap",
   ]
   pruneopts = "NUT"
-  revision = "2fdaae294f38ed9a121193c51ec99fecd3b13eb7"
-  version = "v1.19.0"
+  revision = "25c4f928eaa6d96443009bd842389fb4fa48664e"
+  version = "v1.20.1"
 
 [[projects]]
   digest = "1:22b2dee6f30bc8601f087449a2a819df8388e54e9547349c658f14d8f8c590f2"
@@ -1236,6 +1239,7 @@
     "github.com/onsi/gomega",
     "github.com/onsi/gomega/gbytes",
     "github.com/onsi/gomega/gexec",
+    "github.com/onsi/gomega/gstruct",
     "github.com/onsi/gomega/types",
     "github.com/op/go-logging",
     "github.com/pkg/errors",

@@ -8,15 +8,12 @@ package chaincode
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 	"unicode/utf8"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/util"
-	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
+	persistence "github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/sysccprovider"
 	"github.com/hyperledger/fabric/core/container/ccintf"
@@ -58,79 +55,19 @@ type Lifecycle interface {
 
 // ChaincodeSupport responsible for providing interfacing with chaincodes from the Peer.
 type ChaincodeSupport struct {
-	Keepalive              time.Duration
-	ExecuteTimeout         time.Duration
-	UserRunsCC             bool
-	Runtime                Runtime
 	ACLProvider            ACLProvider
-	HandlerRegistry        *HandlerRegistry
-	Launcher               Launcher
-	SystemCCProvider       sysccprovider.SystemChaincodeProvider
-	Lifecycle              Lifecycle
 	AppConfig              ApplicationConfigRetriever
-	HandlerMetrics         *HandlerMetrics
-	LaunchMetrics          *LaunchMetrics
 	DeployedCCInfoProvider ledger.DeployedChaincodeInfoProvider
-}
-
-// NewChaincodeSupport creates a new ChaincodeSupport instance.
-func NewChaincodeSupport(
-	config *Config,
-	peerAddress string,
-	userRunsCC bool,
-	caCert []byte,
-	certGenerator CertGenerator,
-	packageProvider PackageProvider,
-	lifecycle Lifecycle,
-	aclProvider ACLProvider,
-	processor Processor,
-	SystemCCProvider sysccprovider.SystemChaincodeProvider,
-	platformRegistry *platforms.Registry,
-	appConfig ApplicationConfigRetriever,
-	metricsProvider metrics.Provider,
-	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
-) *ChaincodeSupport {
-	cs := &ChaincodeSupport{
-		UserRunsCC:             userRunsCC,
-		Keepalive:              config.Keepalive,
-		ExecuteTimeout:         config.ExecuteTimeout,
-		HandlerRegistry:        NewHandlerRegistry(userRunsCC),
-		ACLProvider:            aclProvider,
-		SystemCCProvider:       SystemCCProvider,
-		Lifecycle:              lifecycle,
-		AppConfig:              appConfig,
-		HandlerMetrics:         NewHandlerMetrics(metricsProvider),
-		LaunchMetrics:          NewLaunchMetrics(metricsProvider),
-		DeployedCCInfoProvider: deployedCCInfoProvider,
-	}
-
-	// Keep TestQueries working
-	if !config.TLSEnabled {
-		certGenerator = nil
-	}
-
-	cs.Runtime = &ContainerRuntime{
-		CertGenerator:    certGenerator,
-		Processor:        processor,
-		CACert:           caCert,
-		PeerAddress:      peerAddress,
-		PlatformRegistry: platformRegistry,
-		CommonEnv: []string{
-			"CORE_CHAINCODE_LOGGING_LEVEL=" + config.LogLevel,
-			"CORE_CHAINCODE_LOGGING_SHIM=" + config.ShimLogLevel,
-			"CORE_CHAINCODE_LOGGING_FORMAT=" + config.LogFormat,
-		},
-	}
-
-	cs.Launcher = &RuntimeLauncher{
-		Runtime:         cs.Runtime,
-		Registry:        cs.HandlerRegistry,
-		PackageProvider: packageProvider,
-		StartupTimeout:  config.StartupTimeout,
-		Metrics:         cs.LaunchMetrics,
-	}
-
-	return cs
+	ExecuteTimeout         time.Duration
+	HandlerMetrics         *HandlerMetrics
+	HandlerRegistry        *HandlerRegistry
+	Keepalive              time.Duration
+	Launcher               Launcher
+	Lifecycle              Lifecycle
+	Runtime                Runtime
+	SystemCCProvider       sysccprovider.SystemChaincodeProvider
+	TotalQueryLimit        int
+	UserRunsCC             bool
 }
 
 // LaunchInit bypasses getting the chaincode spec from the LSCC table
@@ -190,6 +127,7 @@ func (cs *ChaincodeSupport) HandleChaincodeStream(stream ccintf.ChaincodeStream)
 		DeployedCCInfoProvider:     cs.DeployedCCInfoProvider,
 		AppConfig:                  cs.AppConfig,
 		Metrics:                    cs.HandlerMetrics,
+		TotalQueryLimit:            cs.TotalQueryLimit,
 	}
 
 	return handler.ProcessStream(stream)
@@ -385,7 +323,7 @@ func (cs *ChaincodeSupport) execute(cctyp pb.ChaincodeMessage_Type, txParams *cc
 
 	ccresp, err := h.Execute(txParams, cccid, ccMsg, cs.ExecuteTimeout)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("error sending"))
+		return nil, errors.WithMessage(err, "error sending")
 	}
 
 	return ccresp, nil

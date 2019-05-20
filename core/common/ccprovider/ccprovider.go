@@ -18,7 +18,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/chaincode"
 	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/core/chaincode/persistence/intf"
+	persistence "github.com/hyperledger/fabric/core/chaincode/persistence/intf"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
 	pb "github.com/hyperledger/fabric/protos/peer"
@@ -476,9 +476,12 @@ func (cd *ChaincodeData) Endorsement() string {
 	return cd.Escc
 }
 
-// RequiresInit always returns true as this is the legacy form of chaincode.
+// RequiresInit always returns false because chaincodes
+// defined using the legacy lifecycle do not require an
+// explicit initialisation step since Init is invoked as
+// part of the LSCC invocation
 func (cd *ChaincodeData) RequiresInit() bool {
-	return true
+	return false
 }
 
 // implement functions needed from proto.Message for proto's mar/unmarshal functions

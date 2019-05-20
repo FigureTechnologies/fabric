@@ -141,7 +141,8 @@ func (c ChaincodePackage) Args() []string {
 }
 
 type ChaincodeInstallLifecycle struct {
-	PackageFile string
+	PackageFile   string
+	PeerAddresses []string
 }
 
 func (c ChaincodeInstallLifecycle) SessionName() string {
@@ -152,6 +153,10 @@ func (c ChaincodeInstallLifecycle) Args() []string {
 	args := []string{
 		"lifecycle", "chaincode", "install",
 		c.PackageFile,
+	}
+
+	for _, p := range c.PeerAddresses {
+		args = append(args, "--peerAddresses", p)
 	}
 
 	return args
@@ -223,8 +228,54 @@ func (c ChaincodeApproveForMyOrgLifecycle) Args() []string {
 		"--version", c.Version,
 		"--package-id", c.PackageID,
 		"--sequence", c.Sequence,
-		"--escc", c.EndorsementPlugin,
-		"--vscc", c.ValidationPlugin,
+		"--endorsement-plugin", c.EndorsementPlugin,
+		"--validation-plugin", c.ValidationPlugin,
+		"--signature-policy", c.SignaturePolicy,
+		"--channel-config-policy", c.ChannelConfigPolicy,
+	}
+
+	if c.InitRequired {
+		args = append(args, "--init-required")
+	}
+
+	if c.CollectionsConfig != "" {
+		args = append(args, "--collections-config", c.CollectionsConfig)
+	}
+
+	for _, p := range c.PeerAddresses {
+		args = append(args, "--peerAddresses", p)
+	}
+
+	return args
+}
+
+type ChaincodeQueryApprovalStatusLifecycle struct {
+	ChannelID           string
+	Name                string
+	Version             string
+	Sequence            string
+	EndorsementPlugin   string
+	ValidationPlugin    string
+	SignaturePolicy     string
+	ChannelConfigPolicy string
+	InitRequired        bool
+	CollectionsConfig   string
+	PeerAddresses       []string
+}
+
+func (c ChaincodeQueryApprovalStatusLifecycle) SessionName() string {
+	return "peer-lifecycle-chaincode-queryapprovalstatus"
+}
+
+func (c ChaincodeQueryApprovalStatusLifecycle) Args() []string {
+	args := []string{
+		"lifecycle", "chaincode", "queryapprovalstatus",
+		"--channelID", c.ChannelID,
+		"--name", c.Name,
+		"--version", c.Version,
+		"--sequence", c.Sequence,
+		"--endorsement-plugin", c.EndorsementPlugin,
+		"--validation-plugin", c.ValidationPlugin,
 		"--signature-policy", c.SignaturePolicy,
 		"--channel-config-policy", c.ChannelConfigPolicy,
 	}
@@ -272,8 +323,8 @@ func (c ChaincodeCommitLifecycle) Args() []string {
 		"--name", c.Name,
 		"--version", c.Version,
 		"--sequence", c.Sequence,
-		"--escc", c.EndorsementPlugin,
-		"--vscc", c.ValidationPlugin,
+		"--endorsement-plugin", c.EndorsementPlugin,
+		"--validation-plugin", c.ValidationPlugin,
 		"--signature-policy", c.SignaturePolicy,
 		"--channel-config-policy", c.ChannelConfigPolicy,
 	}

@@ -47,8 +47,11 @@
 
 ALPINE_VER ?= 3.9
 BASE_VERSION = 2.0.0
-PREV_VERSION = 1.4.0
+PREV_VERSION = 2.0.0-alpha
 BASEIMAGE_RELEASE = 0.4.15
+
+# 3rd party image version
+COUCHDB_VER ?= 2.3
 
 # Allow to build as a submodule setting the main project to
 # the PROJECT_NAME env variable, for example,
@@ -110,7 +113,7 @@ all: native docker checks
 
 checks: basic-checks unit-test integration-test
 
-basic-checks: license spelling trailing-spaces linter check-metrics-doc
+basic-checks: license spelling references trailing-spaces linter check-metrics-doc
 
 desk-check: checks verify
 
@@ -120,8 +123,7 @@ help-docs: native
 # Pull thirdparty docker images based on the latest baseimage release version
 .PHONY: docker-thirdparty
 docker-thirdparty:
-	docker pull $(BASE_DOCKER_NS)/fabric-couchdb:$(BASE_DOCKER_TAG)
-	docker tag $(BASE_DOCKER_NS)/fabric-couchdb:$(BASE_DOCKER_TAG) $(DOCKER_NS)/fabric-couchdb
+	docker pull couchdb:${COUCHDB_VER}
 	docker pull $(BASE_DOCKER_NS)/fabric-zookeeper:$(BASE_DOCKER_TAG)
 	docker tag $(BASE_DOCKER_NS)/fabric-zookeeper:$(BASE_DOCKER_TAG) $(DOCKER_NS)/fabric-zookeeper
 	docker pull $(BASE_DOCKER_NS)/fabric-kafka:$(BASE_DOCKER_TAG)
@@ -130,6 +132,10 @@ docker-thirdparty:
 .PHONY: spelling
 spelling:
 	@scripts/check_spelling.sh
+
+.PHONY: references
+references:
+	@scripts/check_references.sh
 
 .PHONY: license
 license:
@@ -254,6 +260,10 @@ $(BUILD_DIR)/images/baseos/$(DUMMY):
 	docker tag $(DOCKER_NS)/fabric-$(TARGET) us.gcr.io/figure-development/fabric-$(TARGET):$(DOCKER_TAG)
 
 	@touch $@
+
+$(BUILD_DIR)/images/peer/$(DUMMY): BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
+
+$(BUILD_DIR)/images/orderer/$(DUMMY): BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
 
 $(BUILD_DIR)/images/%/$(DUMMY):
 	@mkdir -p $(@D)

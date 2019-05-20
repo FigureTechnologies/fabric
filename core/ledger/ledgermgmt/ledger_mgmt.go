@@ -39,13 +39,15 @@ var once sync.Once
 
 // Initializer encapsulates all the external dependencies for the ledger module
 type Initializer struct {
-	CustomTxProcessors            customtx.Processors
-	StateListeners                []ledger.StateListener
-	PlatformRegistry              *platforms.Registry
-	DeployedChaincodeInfoProvider ledger.DeployedChaincodeInfoProvider
-	MembershipInfoProvider        ledger.MembershipInfoProvider
-	MetricsProvider               metrics.Provider
-	HealthCheckRegistry           ledger.HealthCheckRegistry
+	CustomTxProcessors              customtx.Processors
+	StateListeners                  []ledger.StateListener
+	PlatformRegistry                *platforms.Registry
+	DeployedChaincodeInfoProvider   ledger.DeployedChaincodeInfoProvider
+	MembershipInfoProvider          ledger.MembershipInfoProvider
+	ChaincodeLifecycleEventProvider ledger.ChaincodeLifecycleEventProvider
+	MetricsProvider                 metrics.Provider
+	HealthCheckRegistry             ledger.HealthCheckRegistry
+	Config                          *ledger.Config
 }
 
 // Initialize initializes ledgermgmt
@@ -67,19 +69,19 @@ func initialize(initializer *Initializer) {
 		initializer.DeployedChaincodeInfoProvider,
 	})
 	finalStateListeners := addListenerForCCEventsHandler(initializer.DeployedChaincodeInfoProvider, initializer.StateListeners)
-	provider, err := kvledger.NewProvider()
+	provider, err := kvledger.NewProvider(
+		&ledger.Initializer{
+			StateListeners:                  finalStateListeners,
+			DeployedChaincodeInfoProvider:   initializer.DeployedChaincodeInfoProvider,
+			MembershipInfoProvider:          initializer.MembershipInfoProvider,
+			ChaincodeLifecycleEventProvider: initializer.ChaincodeLifecycleEventProvider,
+			MetricsProvider:                 initializer.MetricsProvider,
+			HealthCheckRegistry:             initializer.HealthCheckRegistry,
+			Config:                          initializer.Config,
+		},
+	)
 	if err != nil {
 		panic(errors.WithMessage(err, "Error in instantiating ledger provider"))
-	}
-	err = provider.Initialize(&ledger.Initializer{
-		StateListeners:                finalStateListeners,
-		DeployedChaincodeInfoProvider: initializer.DeployedChaincodeInfoProvider,
-		MembershipInfoProvider:        initializer.MembershipInfoProvider,
-		MetricsProvider:               initializer.MetricsProvider,
-		HealthCheckRegistry:           initializer.HealthCheckRegistry,
-	})
-	if err != nil {
-		panic(errors.WithMessage(err, "Error initializing ledger provider"))
 	}
 	ledgerProvider = provider
 	logger.Info("ledger mgmt initialized")

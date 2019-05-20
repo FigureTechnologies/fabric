@@ -15,7 +15,7 @@ import (
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/peer/common/mock"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
-	"github.com/hyperledger/fabric/msp/mgmt/testtools"
+	msptesttools "github.com/hyperledger/fabric/msp/mgmt/testtools"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
 	"github.com/spf13/viper"
@@ -26,6 +26,12 @@ import (
 
 type signerSerializer interface {
 	identity.SignerSerializer
+}
+
+//go:generate counterfeiter -o mock/deliverservice.go --fake-name DeliverService . deliverService
+
+type deliverService interface {
+	ab.AtomicBroadcast_DeliverClient
 }
 
 var once sync.Once

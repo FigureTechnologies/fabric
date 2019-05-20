@@ -23,7 +23,6 @@ import (
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/core/scc/cscc"
-	"github.com/hyperledger/fabric/internal/peer/common/api"
 	"github.com/hyperledger/fabric/msp"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
 	pcommon "github.com/hyperledger/fabric/protos/common"
@@ -54,7 +53,7 @@ var (
 	// GetPeerDeliverClientFnc is a function that returns a new deliver client connection
 	// to the provided peer address using the TLS root cert file,
 	// by default it is set to GetDeliverClient function
-	GetPeerDeliverClientFnc func(address, tlsRootCertFile string) (api.PeerDeliverClient, error)
+	GetPeerDeliverClientFnc func(address, tlsRootCertFile string) (pb.DeliverClient, error)
 
 	// GetDeliverClientFnc is a function that returns a new deliver client connection
 	// to the provided peer address using the TLS root cert file,
@@ -111,7 +110,7 @@ func InitConfig(cmdRoot string) error {
 				"Please make sure that FABRIC_CFG_PATH is set to a path "+
 				"which contains %s.yaml", cmdRoot))
 		} else {
-			return errors.WithMessage(err, fmt.Sprintf("error when reading %s config file", cmdRoot))
+			return errors.WithMessagef(err, "error when reading %s config file", cmdRoot)
 		}
 	}
 
@@ -142,7 +141,7 @@ func InitCrypto(mspMgrConfigDir, localMSPID, localMSPType string) error {
 
 	err = mspmgmt.LoadLocalMspWithType(mspMgrConfigDir, bccspConfig, localMSPID, localMSPType)
 	if err != nil {
-		return errors.WithMessage(err, fmt.Sprintf("error when setting up MSP of type %s from directory %s", localMSPType, mspMgrConfigDir))
+		return errors.WithMessagef(err, "error when setting up MSP of type %s from directory %s", localMSPType, mspMgrConfigDir)
 	}
 
 	return nil

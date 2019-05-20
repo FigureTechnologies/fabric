@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	docker "github.com/fsouza/go-dockerclient"
 	"github.com/hyperledger/fabric/core/chaincode/accesscontrol"
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
@@ -41,6 +42,7 @@ type ContainerRuntime struct {
 	CommonEnv        []string
 	PeerAddress      string
 	PlatformRegistry *platforms.Registry
+	DockerClient     *docker.Client
 }
 
 func E2eeConfigs(peerAddr, ccName, ccVer string) []string {
@@ -72,6 +74,7 @@ func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePa
 			Path:             ccci.Path,
 			CodePackage:      codePackage,
 			PlatformRegistry: c.PlatformRegistry,
+			Client:           c.DockerClient,
 		},
 		Args:          lc.Args,
 		Env:           lc.Envs,
@@ -179,7 +182,7 @@ func (c *ContainerRuntime) LaunchConfig(packageID string, ccType string) (*Launc
 	if c.CertGenerator != nil {
 		certKeyPair, err := c.CertGenerator.Generate(packageID)
 		if err != nil {
-			return nil, errors.WithMessage(err, fmt.Sprintf("failed to generate TLS certificates for %s", packageID))
+			return nil, errors.WithMessagef(err, "failed to generate TLS certificates for %s", packageID)
 		}
 		lc.Files = c.getTLSFiles(certKeyPair)
 		if lc.Files == nil {

@@ -1,6 +1,6 @@
 # Chaincode for Operators
 
-# What is Chaincode?
+## What is Chaincode?
 
 Chaincode is a program, written in [Go](https://golang.org), [Node.js](https://nodejs.org),
 or [Java](https://java.com/en/) that implements a prescribed interface.
@@ -20,24 +20,28 @@ blockchain network operator rather than an application developer. Chaincode
 operators can use this tutorial to learn how to use the Fabric chainode
 lifecycle to deploy and manage chaincode on their network.
 
-# Chaincode lifecycle
+## Chaincode lifecycle
 
 The Fabric chaincode lifecycle is a process that allows multiple organizations
 to agree on how a chaincode will be operated before it can be used on a channel.
 The tutorial will discuss how a chaincode operator would use the Fabric
-lifecycle perform the following tasks:
+lifecycle to perform the following tasks:
 
-- [Install and define a chaincode](#install-and-define-a-chaincode).
-- [Upgrade a chaincode](#upgrade-a-chaincode).
-- [Migrate to the new Fabric lifecycle](#migrate-to-the-new-fabric-lifecycle).
+- [Install and define a chaincode](#install-and-define-a-chaincode)
+- [Upgrade a chaincode](#upgrade-a-chaincode)
+- [Migrate to the new Fabric lifecycle](#migrate-to-the-new-fabric-lifecycle)
 
-_Note: The Fabric chaincode lifecycle is being introduced as an Alpha feature in
-Fabric v2.0. As a result, some Fabric features cannot be used with chainode that
-uses the new Fabric lifecycle:
-- *Service Discovery is not supported
-- *CouchDB indexes are not supported
-*To use the old lifecycle model to install and instantiate a chaincode, visit the
-v1.4 version of the [Chaincode for Operators tutorial](https://hyperledger-fabric.readthedocs.io/en/release-1.4/chaincode4noah.html)_
+*Note: The new Fabric chaincode lifecycle in the v2.0 Alpha release is not yet
+feature complete. Specifically, be aware of the following limitations in the
+Alpha release:*
+
+- *Service Discovery is not yet supported*
+- *Chaincodes defined with the new lifecycle are not yet discoverable
+  via service discovery*
+
+*These limitations will be resolved after the Alpha release. To use the old
+lifecycle model to install and instantiate a chaincode, visit the v1.4 version
+of the [Chaincode for Operators tutorial](https://hyperledger-fabric.readthedocs.io/en/release-1.4/chaincode4noah.html).*
 
 ## Install and define a chaincode
 
@@ -53,16 +57,19 @@ every organization on a channel needs to complete each step.
   step.
 3. **Approve a chaincode definition for your organization:** Every organization
   that will use the chaincode needs to complete this step. The chaincode
-  definition needs to be approved by a sufficient number of organizations (a
-  majority, by default) before the chaincode can be started on the channel.
+  definition needs to be approved by a sufficient number of organizations
+  to satisfy the channel's LifecycleEndorsment policy (a majority, by default)
+  before the chaincode can be started on the channel.
 4. **Commit the chaincode definition to the channel:** The commit transaction
-  needs to be submitted by one organization. The transaction needs to target the
-  peers of other channel members to collect endorsements.
+  needs to be submitted by one organization once the required number of
+  organizations on the channel have approved. The submitter first collects
+  endorsements from enough peers of the organizations that have approved, and
+  then submits the transaction to commit the chaincode definition.
 
 This tutorial provides a detailed overview of the operations of the Fabric
 chaincode lifecycle rather than the specific commands. To learn more about how
 to use the Fabric lifecycle using the Peer CLI, see [Install and define a chaincode](build_network.html#install-define-chaincode)
-in the Building your First Network Tutorial or the [peer lifecycle command reference](../commands/peerlifecycle.html).
+in the Building your First Network Tutorial or the [peer lifecycle command reference](commands/peerlifecycle.html).
 To learn more about how to use the Fabric lifecycle using the Fabric SDK for
 Node.js, visit [How to install and start your chaincode](https://fabric-sdk-node.github.io/master/tutorial-chaincode-lifecycle.html).
 
@@ -79,12 +86,12 @@ to be in the format below. The Fabric peer binaries and the Fabric SDKs will
 automatically create a file in this format.
 - The chaincode needs to be packaged in a tar file, ending with a `.tar.gz` file
   extension.
-- The tar file needs to contains two files (no directory): a metadata file
-  ("Chaincode-Package-Metadata.json") and another tar containing the chaincode
+- The tar file needs to contain two files (no directory): a metadata file
+  "Chaincode-Package-Metadata.json" and another tar containing the chaincode
   files.
-- The chaincode language, code path, and package label need to be specified in a
-  JSON file named `Chaincode-Package-Metadata.json`, at the same level as your
-  packaged code files. You can see an example of a metadata file below:
+- "Chaincode-Package-Metadata.json" contains JSON that specifies the
+  chaincode language, code path, and package label.
+  You can see an example of a metadata file below:
   ```
   {"Path":"github.com/chaincode/fabcar/go","Type":"golang","Label":"fabcarv1"}
   ```
@@ -161,21 +168,22 @@ chaincode for your organization once, even if you have multiple peers.
 ### Step Four: Commit the chaincode definition to the channel
 
 Once a sufficient number of channel members have approved a chaincode definition,
-one organization can commit the definition to the channel. The channel members
-need to communicate that they have approved the definition out of band. The
-commit transaction is first submitted to the peers of channel members, who query
-the chaincode definition approved for their organizations and endorse the
-definition if their organization has approved it. The transaction is then sent
-to the ordering service, which then commits the chaincode definition to the
-channel. The commit definition transaction needs to be submitted as the
-**Organization Administrator**, whose signing certificate is listed as an admin
-cert in the MSP of your organization definition.
+one organization can commit the definition to the channel. You can use the
+``queryapprovalstatus`` command to find which channel members have approved a
+definition before committing it to the channel using the peer CLI. The commit
+transaction proposal is first sent to the peers of channel members, who query the
+chaincode definition approved for their organizations and endorse the definition
+if their organization has approved it. The transaction is then submitted to the
+ordering service, which then commits the chaincode definition to the channel.
+The commit definition transaction needs to be submitted as the **Organization**
+**Administrator**, whose signing certificate is listed as an admin cert in the
+MSP of your organization definition.
 
 The number of organizations that need to approve a definition before it can be
 successfully committed to the channel is governed by the
-``Channel/Application/LifecycleEndorsment`` policy. By default, this policy
+``Channel/Application/LifecycleEndorsement`` policy. By default, this policy
 requires that a majority of organizations in the channel endorse the transaction.
-The LifecycleEndorsment policy is separate from the chaincode endorsement
+The LifecycleEndorsement policy is separate from the chaincode endorsement
 policy. For example, even if a chaincode endorsement policy only requires
 signatures from one or two organizations, a majority of channel members still
 need to approve the chaincode definition according to the default policy. When
@@ -189,9 +197,9 @@ the Lifecycle Endorsement policy is satisfied.
 
 After the chaincode definition has been committed to the channel, channel
 members can start using the chaincode. The first invoke of the chaincode will
-start the chaincode containers on all of the peers targeted by the transaction,
-as long as those peers have installed the chaincode package. You can use the
-chaincode definition to require the invocation of the ``Init`` function to start
+start the chaincode containers on all of the peers targeted by the transaction
+proposal, as long as those peers have installed the chaincode package. You can use
+the chaincode definition to require the invocation of the ``Init`` function to start
 the chaincode. Otherwise, a channel member can start the chaincode container by
 invoking any transaction in the chaincode. The first invoke, whether of an
 ``Init`` function or other transaction, is subject to the chaincode endorsement
@@ -234,13 +242,14 @@ number by one and approve a new definition to upgrade the chaincode. The version
 parameter is used to track the chaincode binaries, and needs to be changed only
 when you upgrade the chaincode binaries.
 
-## Migrating to the new Fabric lifecycle
+## Migrate to the new Fabric lifecycle
 
-You can use the Fabric chaincode lifecycle my creating a new channel and setting
-the channel capabilities to `V2_0`. You will not be able to use the old lifecycle
-to install, instantiate, or update a chaincode on a channels with `V2_0` capabilities
-enabled. Migration from the old lifecycle to the new lifecycle is not supported
-for the Fabric v2.0 Alpha.
+You can use the Fabric chaincode lifecycle by creating a new channel and setting
+the channel capabilities to `V2_0`. You will not be able to use the previous
+lifecycle to install, instantiate, or update a chaincode on a channels with
+`V2_0` capabilities enabled. There is no upgrade support to the v2.0 Alpha
+release, and no intended upgrade support from the the Alpha release to future
+versions of v2.x.
 
 <!--- Licensed under Creative Commons Attribution 4.0 International License
 https://creativecommons.org/licenses/by/4.0/ -->

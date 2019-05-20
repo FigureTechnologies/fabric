@@ -156,10 +156,7 @@ var _ = Describe("Consenter", func() {
 		metadata := protoutil.MarshalOrPanic(m)
 		support.SharedConfigReturns(&mockconfig.Orderer{
 			ConsensusMetadataVal: metadata,
-			CapabilitiesVal: &mockconfig.OrdererCapabilities{
-				Kafka2RaftMigVal: false,
-			},
-			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+			BatchSizeVal:         &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
 		})
 
 		consenter := newConsenter(chainGetter)
@@ -199,10 +196,7 @@ var _ = Describe("Consenter", func() {
 		support := &consensusmocks.FakeConsenterSupport{}
 		support.SharedConfigReturns(&mockconfig.Orderer{
 			ConsensusMetadataVal: metadata,
-			CapabilitiesVal: &mockconfig.OrdererCapabilities{
-				Kafka2RaftMigVal: false,
-			},
-			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+			BatchSizeVal:         &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
 		})
 		support.ChainIDReturns("foo")
 
@@ -224,10 +218,7 @@ var _ = Describe("Consenter", func() {
 		metadata := protoutil.MarshalOrPanic(m)
 		support.SharedConfigReturns(&mockconfig.Orderer{
 			ConsensusMetadataVal: metadata,
-			CapabilitiesVal: &mockconfig.OrdererCapabilities{
-				Kafka2RaftMigVal: false,
-			},
-			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+			BatchSizeVal:         &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
 		})
 
 		consenter := newConsenter(chainGetter)
@@ -253,10 +244,8 @@ var _ = Describe("Consenter", func() {
 		metadata := protoutil.MarshalOrPanic(m)
 		support.SharedConfigReturns(&mockconfig.Orderer{
 			ConsensusMetadataVal: metadata,
-			CapabilitiesVal: &mockconfig.OrdererCapabilities{
-				Kafka2RaftMigVal: false,
-			},
-			BatchSizeVal: &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
+			CapabilitiesVal:      &mockconfig.OrdererCapabilities{},
+			BatchSizeVal:         &orderer.BatchSize{PreferredMaxBytes: 2 * 1024 * 1024},
 		})
 
 		consenter := newConsenter(chainGetter)
@@ -289,11 +278,13 @@ func newConsenter(chainGetter *mocks.ChainGetter) *consenter {
 			Logger:        flogging.MustGetLogger("test"),
 			ChainSelector: &mocks.ReceiverGetter{},
 		},
-		Dialer: cluster.NewTLSPinningDialer(comm.ClientConfig{
-			SecOpts: &comm.SecureOptions{
-				Certificate: ca.CertBytes(),
+		Dialer: &cluster.PredicateDialer{
+			Config: comm.ClientConfig{
+				SecOpts: &comm.SecureOptions{
+					Certificate: ca.CertBytes(),
+				},
 			},
-		}),
+		},
 	}
 	return &consenter{
 		Consenter: c,

@@ -69,8 +69,6 @@ type ConsenterSupport struct {
 
 	// BlockVerificationErr is returned by VerifyBlockSignature
 	BlockVerificationErr error
-
-	SystemChannelVal bool
 }
 
 // Block returns the block with the given number or nil if not found
@@ -173,15 +171,14 @@ func (mcs *ConsenterSupport) VerifyBlockSignature(_ []*protoutil.SignedData, _ *
 	return mcs.BlockVerificationErr
 }
 
-// IsSystemChannel returns true if this is the system channel
-func (mcs *ConsenterSupport) IsSystemChannel() bool {
-	return mcs.SystemChannelVal
-}
-
 // Append appends a new block to the ledger in its raw form,
 // unlike WriteBlock that also mutates its metadata.
 func (mcs *ConsenterSupport) Append(block *cb.Block) error {
 	mcs.HeightVal++
 	mcs.Blocks <- block
 	return nil
+}
+
+func (mcs *ConsenterSupport) DetectConsensusMigration() bool {
+	return false
 }

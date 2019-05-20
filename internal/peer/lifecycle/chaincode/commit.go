@@ -15,7 +15,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/internal/peer/chaincode"
 	"github.com/hyperledger/fabric/internal/peer/common"
-	"github.com/hyperledger/fabric/internal/peer/common/api"
 	cb "github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	lb "github.com/hyperledger/fabric/protos/peer/lifecycle"
@@ -32,7 +31,7 @@ type Committer struct {
 	Command         *cobra.Command
 	BroadcastClient common.BroadcastClient
 	EndorserClients []EndorserClient
-	DeliverClients  []api.PeerDeliverClient
+	DeliverClients  []pb.DeliverClient
 	Input           *CommitInput
 	Signer          Signer
 }
@@ -132,8 +131,8 @@ func CommitCmd(c *Committer) *cobra.Command {
 		"name",
 		"version",
 		"sequence",
-		"escc",
-		"vscc",
+		"endorsement-plugin",
+		"validation-plugin",
 		"signature-policy",
 		"channel-config-policy",
 		"init-required",
@@ -259,8 +258,8 @@ func (c *Committer) createInput() (*CommitInput, error) {
 		Name:                     chaincodeName,
 		Version:                  chaincodeVersion,
 		Sequence:                 int64(sequence),
-		EndorsementPlugin:        escc,
-		ValidationPlugin:         vscc,
+		EndorsementPlugin:        endorsementPlugin,
+		ValidationPlugin:         validationPlugin,
 		ValidationParameterBytes: policyBytes,
 		InitRequired:             initRequired,
 		CollectionConfigPackage:  ccp,

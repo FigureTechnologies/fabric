@@ -1846,6 +1846,77 @@ func TestChannelPullWithDigestsFilter(t *testing.T) {
 
 }
 
+func TestFilterForeignOrgLeadershipMessages(t *testing.T) {
+	t.Parallel()
+
+	org1 := api.OrgIdentityType("org1")
+	org2 := api.OrgIdentityType("org2")
+
+	p1 := common.PKIidType("p1")
+	p2 := common.PKIidType("p2")
+
+	cs := &cryptoService{}
+	adapter := &gossipAdapterMock{}
+
+	relayedLeadershipMsgs := make(chan interface{}, 2)
+
+	adapter.On("GetOrgOfPeer", p1).Return(org1)
+	adapter.On("GetOrgOfPeer", p2).Return(org2)
+
+	adapter.On("GetMembership").Return([]discovery.NetworkMember{})
+	adapter.On("GetConf").Return(conf)
+	adapter.On("DeMultiplex", mock.Anything).Run(func(args mock.Arguments) {
+		relayedLeadershipMsgs <- args.Get(0)
+	})
+
+	joinMsg := &joinChanMsg{
+		members2AnchorPeers: map[string][]api.AnchorPeer{
+			string(org1): {},
+			string(org2): {},
+		},
+	}
+
+	loggedEntries := make(chan string, 1)
+	logger := flogging.MustGetLogger("test").WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		loggedEntries <- entry.Message
+		return nil
+	}))
+	assertLogged := func(s string) {
+		assert.Len(t, loggedEntries, 1)
+		loggedEntry := <-loggedEntries
+		assert.Contains(t, loggedEntry, s)
+	}
+
+	gc := NewGossipChannel(pkiIDInOrg1, org1, cs, channelA, adapter, joinMsg, disabledMetrics, logger)
+
+	leadershipMsg := func(sender common.PKIidType, creator common.PKIidType) protoext.ReceivedMessage {
+		return &receivedMsg{PKIID: sender,
+			msg: &protoext.SignedGossipMessage{
+				GossipMessage: &proto.GossipMessage{
+					Channel: common.ChainID("A"),
+					Tag:     proto.GossipMessage_CHAN_AND_ORG,
+					Content: &proto.GossipMessage_LeadershipMsg{
+						LeadershipMsg: &proto.LeadershipMessage{
+							PkiId: creator,
+						}},
+				},
+			},
+		}
+	}
+
+	gc.HandleMessage(leadershipMsg(p1, p1))
+	assert.Len(t, relayedLeadershipMsgs, 1, "should have relayed a message from p1 (same org)")
+	assert.Len(t, loggedEntries, 0)
+
+	gc.HandleMessage(leadershipMsg(p2, p1))
+	assert.Len(t, relayedLeadershipMsgs, 1, "should not have relayed a message from p2 (foreign org)")
+	assertLogged("Received leadership message from  that belongs to a foreign organization org2")
+
+	gc.HandleMessage(leadershipMsg(p1, p2))
+	assert.Len(t, relayedLeadershipMsgs, 1, "should not have relayed a message from p2 (foreign org)")
+	assertLogged("Received leadership message created by a foreign organization org2")
+}
+
 func createDataUpdateMsg(nonce uint64, seqs ...uint64) *protoext.SignedGossipMessage {
 	msg := &proto.GossipMessage{
 		Nonce:   0,
@@ -2022,7 +2093,6 @@ func TestChangesInPeers(t *testing.T) {
 	// Scenario5: new peer was added and there were no other peers before
 	// Scenario6: a peer was deleted and no new peers were added
 	// Scenario7: one peer was deleted and all other peers stayed with no change
-	t.Parallel()
 	type testCase struct {
 		name                     string
 		oldMembers               map[string]struct{}
@@ -2104,21 +2174,20 @@ func TestChangesInPeers(t *testing.T) {
 			expectedTotal:            2,
 		},
 	}
-	invokedReport := false
-	//channel for holding the output of report
-	chForString := make(chan string, 1)
-	defer func() {
-		invokedReport = false
-	}()
-	funcLogger := func(a ...interface{}) {
-		invokedReport = true
-		chForString <- fmt.Sprint(a...)
-	}
 
 	for _, test := range cases {
+		test := test
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			//channel for holding the output of report
+			chForString := make(chan string, 1)
+			// this is called as mt.report()
+			funcLogger := func(a ...interface{}) {
+				chForString <- fmt.Sprint(a...)
+			}
+
 			tickChan := make(chan time.Time)
-			i := 0
 
 			buildMembers := func(rangeMembers map[string]struct{}) []discovery.NetworkMember {
 				var members []discovery.NetworkMember
@@ -2133,18 +2202,20 @@ func TestChangesInPeers(t *testing.T) {
 				return members
 			}
 
-			stopChan := make(chan struct{}, 1)
+			stopChan := make(chan struct{})
 
+			getPeersToTrackCallCount := 0
 			getListOfPeers := func() []discovery.NetworkMember {
 				var members []discovery.NetworkMember
-				if i == 1 {
-					members = buildMembers(test.newMembers)
-					i++
-					stopChan <- struct{}{}
-				}
-				if i == 0 {
+				if getPeersToTrackCallCount == 0 {
 					members = buildMembers(test.oldMembers)
-					i++
+					getPeersToTrackCallCount++
+				} else if getPeersToTrackCallCount == 1 {
+					members = buildMembers(test.newMembers)
+					getPeersToTrackCallCount++
+					close(stopChan) // no more ticks, stop tracking changes
+				} else {
+					t.Fatal("getPeersToTrack called too many times")
 				}
 				return members
 			}
@@ -2167,16 +2238,22 @@ func TestChangesInPeers(t *testing.T) {
 				mt.trackMembershipChanges()
 				wgMT.Done()
 			}()
-			defer wgMT.Wait()
 
 			tickChan <- time.Time{}
-			if test.name == "noChanges" {
-				test.entryInChannel(chForString)
+
+			test.entryInChannel(chForString) // need to wait until the string is sent
+			actual := <-chForString
+
+			// setup complete, start testing
+			assert.Contains(t, test.expected, actual)
+
+			// mt needs to have received a tick before it was closed
+			wgMT.Wait()
+			if testMetricProvider.FakeTotalGauge.WithCallCount() < 1 {
+				t.Fatal("did not get With() call")
 			}
-			select {
-			case actual, _ := <-chForString:
-				assert.Contains(t, test.expected, actual)
-				assert.Equal(t, test.expectedReportInvocation, invokedReport)
+			if testMetricProvider.FakeTotalGauge.SetCallCount() < 1 {
+				t.Fatal("did not get Set() call")
 			}
 			assert.Equal(t, []string{"channel", "test"}, testMetricProvider.FakeTotalGauge.WithArgsForCall(0))
 			assert.EqualValues(t, test.expectedTotal, testMetricProvider.FakeTotalGauge.SetArgsForCall(0))
@@ -2190,7 +2267,7 @@ func TestMembershiptrackerStopWhenGCStops(t *testing.T) {
 	// membershipTracker does not print after gossip channel was stopped
 	// membershipTracker stops running after gossip channel was stopped
 	t.Parallel()
-	checkIfStopedChan := make(chan struct{}, 1)
+	membershipReported := make(chan struct{}, 1)
 	cs := &cryptoService{}
 	pkiID1 := common.PKIidType("1")
 	adapter := new(gossipAdapterMock)
@@ -2236,7 +2313,7 @@ func TestMembershiptrackerStopWhenGCStops(t *testing.T) {
 			if !strings.Contains(entry.Message, "Membership view has changed. peers went offline:  [[a]] , peers went online:  [[b]] , current view:  [[b]]") {
 				return nil
 			}
-			checkIfStopedChan <- struct{}{}
+			close(membershipReported)
 			return nil
 		}
 		return nil
@@ -2248,15 +2325,21 @@ func TestMembershiptrackerStopWhenGCStops(t *testing.T) {
 	gc.HandleMessage(&receivedMsg{PKIID: pkiIDinOrg2, msg: createStateInfoMsg(1, pkiIDinOrg2, channelA)})
 	<-waitForHandleMsgChan
 
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	adapter.On("GetMembership").Return([]discovery.NetworkMember{peerB}).Run(func(args mock.Arguments) {
+		defer wg.Done()
 		gc.(*gossipChannel).Stop()
 	}).Once()
 
 	flogging.Global.ActivateSpec("info")
 	atomic.StoreUint32(&check, 1)
-	<-checkIfStopedChan
+	<-membershipReported
+
+	wg.Wait()
+	adapter.On("GetMembership").Return([]discovery.NetworkMember{peerB}).Run(func(args mock.Arguments) {
+		t.Fatalf("Membership tracker should have been stopped already.")
+	})
 
 	time.Sleep(conf.TimeForMembershipTracker * 2)
-	adapter.AssertNumberOfCalls(t, "GetMembership", 2)
-
 }

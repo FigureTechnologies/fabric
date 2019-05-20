@@ -103,8 +103,6 @@ var _ = Describe("Network", func() {
 				Lang:                "golang",
 				PackageFile:         filepath.Join(tempDir, "simplecc.tar.gz"),
 				Ctor:                `{"Args":["init","a","100","b","200"]}`,
-				EndorsementPlugin:   "escc",
-				ValidationPlugin:    "vscc",
 				Policy:              `AND ('Org1ExampleCom.member','Org2ExampleCom.member')`,
 				ChannelConfigPolicy: "/Channel/Application/Endorsement",
 				Sequence:            "1",
@@ -139,7 +137,7 @@ var _ = Describe("Network", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit(1))
 			Expect(sess.Err).To(gbytes.Say("Error: endorsement failure during query. response: status:500 " +
-				"message:\"make sure the chaincode mycc has been successfully instantiated and try " +
+				"message:\"make sure the chaincode mycc has been successfully defined on channel testchannel and try " +
 				"again: chaincode definition for 'mycc' exists, but chaincode is not installed\""))
 
 			By("setting the correct package ID to restore the chaincode")
@@ -314,14 +312,8 @@ var _ = Describe("Network", func() {
 
 			nwo.InstallChaincodeNewLifecycle(network, chaincode, testPeers...)
 
-			maxLedgerHeight := nwo.GetMaxLedgerHeight(network, "testchannel", testPeers...)
-			for _, org := range network.PeerOrgs() {
-				nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, network.PeersInOrg(org.Name)...)
-			}
-			// wait for all peers to have same ledger height (to ensure the
-			// ApproveChaincodeDefinitionForMyOrg blocks have been gossiped
-			// to the other peers in each org
-			nwo.WaitUntilEqualLedgerHeight(network, "testchannel", maxLedgerHeight+len(network.PeerOrgs()), testPeers...)
+			nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, testPeers...)
+			nwo.EnsureApproved(network, "testchannel", chaincode, network.PeerOrgs(), testPeers...)
 
 			nwo.CommitChaincodeNewLifecycle(network, "testchannel", orderer, chaincode, testPeers[0], testPeers...)
 			nwo.InitChaincodeNewLifecycle(network, "testchannel", orderer, chaincode, testPeers...)
@@ -330,12 +322,9 @@ var _ = Describe("Network", func() {
 
 			// upgrade chaincode to sequence 2
 			chaincode.Sequence = "2"
-			maxLedgerHeight = nwo.GetMaxLedgerHeight(network, "testchannel", testPeers...)
-			for _, org := range network.PeerOrgs() {
-				nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, network.PeersInOrg(org.Name)...)
-			}
 
-			nwo.WaitUntilEqualLedgerHeight(network, "testchannel", maxLedgerHeight+len(network.PeerOrgs()), testPeers...)
+			nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, testPeers...)
+			nwo.EnsureApproved(network, "testchannel", chaincode, network.PeerOrgs(), testPeers...)
 
 			nwo.CommitChaincodeNewLifecycle(network, "testchannel", orderer, chaincode, testPeers[0], testPeers...)
 

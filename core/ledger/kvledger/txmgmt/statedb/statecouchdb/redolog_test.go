@@ -14,7 +14,6 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
-	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -97,7 +96,10 @@ func TestCouchdbRedoLogger(t *testing.T) {
 	}
 
 	// initialize statedb with initial set of writes
-	db, _ := testEnv.DBProvider.GetDBHandle("testcouchdbredologger")
+	db, err := testEnv.DBProvider.GetDBHandle("testcouchdbredologger")
+	if err != nil {
+		t.Fatalf("Failed to get database handle: %s", err)
+	}
 	vdb := db.(*VersionedDB)
 	batch1 := statedb.NewUpdateBatch()
 	batch1.Put("ns1", "key1", []byte("value1"), version.NewHeight(1, 1))
@@ -148,8 +150,10 @@ func TestCouchdbRedoLogger(t *testing.T) {
 }
 
 func redologTestSetup(t *testing.T) (p *redoLoggerProvider, cleanup func()) {
-	dbPath := ledgerconfig.GetCouchdbRedologsPath()
-	assert.NoError(t, os.RemoveAll(dbPath))
+	dbPath, err := ioutil.TempDir("", "redolog")
+	if err != nil {
+		t.Fatalf("Failed to create redo log directory: %s", err)
+	}
 	p = newRedoLoggerProvider(dbPath)
 	cleanup = func() {
 		p.close()

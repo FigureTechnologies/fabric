@@ -9,7 +9,6 @@ package peer
 import (
 	"fmt"
 	"net"
-	"runtime"
 	"sync"
 
 	"github.com/hyperledger/fabric/common/channelconfig"
@@ -47,7 +46,6 @@ import (
 	"github.com/hyperledger/fabric/token/tms/manager"
 	"github.com/hyperledger/fabric/token/transaction"
 	"github.com/pkg/errors"
-	"github.com/spf13/viper"
 )
 
 var peerLogger = flogging.MustGetLogger("peer")
@@ -218,15 +216,19 @@ var validationWorkersSemaphore semaphore.Semaphore
 // Initialize sets up any chains that the peer has from the persistence. This
 // function should be called at the start up when the ledger and gossip
 // ready
-func Initialize(init func(string), sccp sysccprovider.SystemChaincodeProvider,
-	pm plugin.Mapper, pr *platforms.Registry, deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
-	membershipProvider ledger.MembershipInfoProvider, metricsProvider metrics.Provider,
+func Initialize(
+	init func(string),
+	sccp sysccprovider.SystemChaincodeProvider,
+	pm plugin.Mapper,
+	pr *platforms.Registry,
+	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
+	membershipProvider ledger.MembershipInfoProvider,
+	metricsProvider metrics.Provider,
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
-	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources) {
-	nWorkers := viper.GetInt("peer.validatorPoolSize")
-	if nWorkers <= 0 {
-		nWorkers = runtime.NumCPU()
-	}
+	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
+	ledgerConfig *ledger.Config,
+	nWorkers int,
+) {
 	validationWorkersSemaphore = semaphore.New(nWorkers)
 
 	pluginMapper = pm
@@ -240,6 +242,7 @@ func Initialize(init func(string), sccp sysccprovider.SystemChaincodeProvider,
 		DeployedChaincodeInfoProvider: deployedCCInfoProvider,
 		MembershipInfoProvider:        membershipProvider,
 		MetricsProvider:               metricsProvider,
+		Config:                        ledgerConfig,
 	})
 	ledgerIds, err := ledgermgmt.GetLedgerIDs()
 	if err != nil {

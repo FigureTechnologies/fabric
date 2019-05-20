@@ -4,7 +4,7 @@ Copyright IBM Corp All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
-package e2e
+package pvtdata
 
 import (
 	"fmt"
@@ -694,11 +694,9 @@ var _ bool = Describe("PrivateData", func() {
 			chaincode.SignaturePolicy = `OR ('Org1MSP.member','Org2MSP.member')`
 			chaincode.CollectionsConfig = filepath.Join("testdata", "collection_configs", "collections_config1.json")
 
-			maxLedgerHeight := nwo.GetMaxLedgerHeight(network, "testchannel", peerAllThreeOrgs...)
-			for _, org := range network.PeerOrgs() {
-				nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, network.PeersInOrg(org.Name)...)
-			}
-			nwo.WaitUntilEqualLedgerHeight(network, "testchannel", maxLedgerHeight+len(network.PeerOrgs()), peerAllThreeOrgs...)
+			nwo.ApproveChaincodeForMyOrgNewLifecycle(network, "testchannel", orderer, chaincode, peerAllThreeOrgs...)
+			nwo.EnsureApproved(network, "testchannel", chaincode, network.PeerOrgs(), peerAllThreeOrgs...)
+
 			nwo.CommitChaincodeNewLifecycle(network, "testchannel", orderer, chaincode, peerAllThreeOrgs[0], peerAllThreeOrgs...)
 
 			By("creating marble4")

@@ -9,11 +9,9 @@ package common
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io/ioutil"
 
 	"github.com/hyperledger/fabric/core/comm"
-	"github.com/hyperledger/fabric/internal/peer/common/api"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 )
@@ -47,7 +45,7 @@ func NewPeerClientForAddress(address, tlsRootCertFile string) (*PeerClient, erro
 		}
 		caPEM, res := ioutil.ReadFile(tlsRootCertFile)
 		if res != nil {
-			err = errors.WithMessage(res, fmt.Sprintf("unable to load TLS root cert file from %s", tlsRootCertFile))
+			err = errors.WithMessagef(res, "unable to load TLS root cert file from %s", tlsRootCertFile)
 			return nil, err
 		}
 		clientConfig.SecOpts.ServerRootCAs = [][]byte{caPEM}
@@ -72,7 +70,7 @@ func newPeerClientForClientConfig(address, override string, clientConfig comm.Cl
 func (pc *PeerClient) Endorser() (pb.EndorserClient, error) {
 	conn, err := pc.commonClient.NewConnection(pc.address, pc.sn)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("endorser client failed to connect to %s", pc.address))
+		return nil, errors.WithMessagef(err, "endorser client failed to connect to %s", pc.address)
 	}
 	return pb.NewEndorserClient(conn), nil
 }
@@ -81,27 +79,26 @@ func (pc *PeerClient) Endorser() (pb.EndorserClient, error) {
 func (pc *PeerClient) Deliver() (pb.Deliver_DeliverClient, error) {
 	conn, err := pc.commonClient.NewConnection(pc.address, pc.sn)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("deliver client failed to connect to %s", pc.address))
+		return nil, errors.WithMessagef(err, "deliver client failed to connect to %s", pc.address)
 	}
 	return pb.NewDeliverClient(conn).Deliver(context.TODO())
 }
 
 // PeerDeliver returns a client for the Deliver service for peer-specific use
 // cases (i.e. DeliverFiltered)
-func (pc *PeerClient) PeerDeliver() (api.PeerDeliverClient, error) {
+func (pc *PeerClient) PeerDeliver() (pb.DeliverClient, error) {
 	conn, err := pc.commonClient.NewConnection(pc.address, pc.sn)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("deliver client failed to connect to %s", pc.address))
+		return nil, errors.WithMessagef(err, "deliver client failed to connect to %s", pc.address)
 	}
-	pbClient := pb.NewDeliverClient(conn)
-	return &PeerDeliverClient{Client: pbClient}, nil
+	return pb.NewDeliverClient(conn), nil
 }
 
 // Admin returns a client for the Admin service
 func (pc *PeerClient) Admin() (pb.AdminClient, error) {
 	conn, err := pc.commonClient.NewConnection(pc.address, pc.sn)
 	if err != nil {
-		return nil, errors.WithMessage(err, fmt.Sprintf("admin client failed to connect to %s", pc.address))
+		return nil, errors.WithMessagef(err, "admin client failed to connect to %s", pc.address)
 	}
 	return pb.NewAdminClient(conn), nil
 }
@@ -170,7 +167,7 @@ func GetDeliverClient(address, tlsRootCertFile string) (pb.Deliver_DeliverClient
 // tlsRootCertFile are not provided, the target values for the client are taken
 // from the configuration settings for "peer.address" and
 // "peer.tls.rootcert.file"
-func GetPeerDeliverClient(address, tlsRootCertFile string) (api.PeerDeliverClient, error) {
+func GetPeerDeliverClient(address, tlsRootCertFile string) (pb.DeliverClient, error) {
 	var peerClient *PeerClient
 	var err error
 	if address != "" {

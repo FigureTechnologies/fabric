@@ -8,9 +8,15 @@ package peer
 
 import (
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/spf13/viper"
 
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/metrics/disabled"
@@ -18,9 +24,10 @@ import (
 	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/committer/txvalidator/plugin"
-	deliverclient "github.com/hyperledger/fabric/core/deliverservice"
+	"github.com/hyperledger/fabric/core/deliverservice"
 	"github.com/hyperledger/fabric/core/deliverservice/blocksprovider"
 	validation "github.com/hyperledger/fabric/core/handlers/validation/api"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/mock"
 	ledgermocks "github.com/hyperledger/fabric/core/ledger/mock"
 	"github.com/hyperledger/fabric/gossip/api"
@@ -60,7 +67,7 @@ func (*mockDeliveryClient) Stop() {
 type mockDeliveryClientFactory struct {
 }
 
-func (*mockDeliveryClientFactory) Service(g service.GossipService, endpoints []string, mcs api.MessageCryptoService) (deliverclient.DeliverService, error) {
+func (*mockDeliveryClientFactory) Service(g service.GossipService, endpoints []string, mcs api.MessageCryptoService) (deliverservice.DeliverService, error) {
 	return &mockDeliveryClient{}, nil
 }
 
@@ -83,8 +90,11 @@ func TestInitChain(t *testing.T) {
 }
 
 func TestInitialize(t *testing.T) {
-	cleanup := setupPeerFS(t)
-	defer cleanup()
+	rootFSPath, err := ioutil.TempDir("", "ledgersData")
+	if err != nil {
+		t.Fatalf("Failed to create ledger directory: %s", err)
+	}
+	defer os.RemoveAll(rootFSPath)
 
 	Initialize(
 		nil,
@@ -94,13 +104,34 @@ func TestInitialize(t *testing.T) {
 		&ledgermocks.DeployedChaincodeInfoProvider{},
 		nil,
 		&disabled.Provider{},
-		nil, nil,
+		nil,
+		nil,
+		&ledger.Config{
+			RootFSPath: rootFSPath,
+			StateDB: &ledger.StateDB{
+				LevelDBPath: filepath.Join(rootFSPath, "stateleveldb"),
+			},
+			PrivateData: &ledger.PrivateData{
+				StorePath:       filepath.Join(rootFSPath, "pvtdataStore"),
+				MaxBatchSize:    5000,
+				BatchesInterval: 1000,
+				PurgeInterval:   100,
+			},
+			HistoryDB: &ledger.HistoryDB{
+				Enabled: true,
+			},
+		},
+		runtime.NumCPU(),
 	)
 }
 
 func TestCreateChainFromBlock(t *testing.T) {
-	cleanup := setupPeerFS(t)
-	defer cleanup()
+	peerFSPath, err := ioutil.TempDir("", "ledgersData")
+	if err != nil {
+		t.Fatalf("Failed to create peer directory: %s", err)
+	}
+	defer os.RemoveAll(peerFSPath)
+	viper.Set("peer.fileSystemPath", peerFSPath)
 
 	Initialize(
 		nil,
@@ -110,7 +141,24 @@ func TestCreateChainFromBlock(t *testing.T) {
 		&ledgermocks.DeployedChaincodeInfoProvider{},
 		nil,
 		&disabled.Provider{},
-		nil, nil,
+		nil,
+		nil,
+		&ledger.Config{
+			RootFSPath: filepath.Join(peerFSPath, "ledgersData"),
+			StateDB: &ledger.StateDB{
+				LevelDBPath: filepath.Join(peerFSPath, "ledgersData", "stateleveldb"),
+			},
+			PrivateData: &ledger.PrivateData{
+				StorePath:       filepath.Join(peerFSPath, "ledgersData", "pvtdataStore"),
+				MaxBatchSize:    5000,
+				BatchesInterval: 1000,
+				PurgeInterval:   100,
+			},
+			HistoryDB: &ledger.HistoryDB{
+				Enabled: true,
+			},
+		},
+		runtime.NumCPU(),
 	)
 	testChainID := fmt.Sprintf("mytestchainid-%d", rand.Int())
 	block, err := configtxtest.MakeGenesisBlock(testChainID)
