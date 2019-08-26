@@ -197,7 +197,7 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			RestartPolicy: "Never", // If we exit for any reason rely on the Peer to reschedule.
 			Containers: []apiv1.Container{
 				{
-					Name:  "fabric-chaincode-mycc-container",
+					Name:  "fabric-chaincode-" + ccid.Name,
 					Image: api.GetChainCodeImageName(ccid),
 					Args:  args,
 					Env:   envvars,
