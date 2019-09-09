@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/hyperledger/fabric/core/chaincode"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -50,6 +51,9 @@ type KubernetesAPI struct {
 	PeerID       string
 	Namespace    string
 	BuildMetrics *BuildMetrics
+
+	mutex      sync.Mutex
+	chaincodes map[string]*chan string
 }
 
 // NewKubernetesAPI creates an instance using the environmental Kubernetes configuration
@@ -73,6 +77,7 @@ func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
 	}
 
 	api.client = client
+	api.chaincodes = make(map[string]*chan string)
 
 	return &api
 }
@@ -117,6 +122,24 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(config)
 }
 
+func (api *KubernetesAPI) getInstance(name string) *chan string {
+	api.mutex.Lock()
+	defer api.mutex.Unlock()
+	return api.chaincodes[name]
+}
+
+func (api *KubernetesAPI) setInstance(name string, inst *chan string) {
+	api.mutex.Lock()
+	defer api.mutex.Unlock()
+	api.chaincodes[name] = inst
+}
+
+func (api *KubernetesAPI) removeInstance(name string) {
+	api.mutex.Lock()
+	defer api.mutex.Unlock()
+	delete(api.chaincodes, name)
+}
+
 // Start a pod in kubernetes for the chaincode
 func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
@@ -133,6 +156,10 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 		return err
 	}
 
+	// Create a stop channel reference
+	ccchan := make(chan string, 1)
+	api.setInstance(api.GetPodName(ccid), &ccchan)
+
 	kubernetesLogger.Infof("Started chaincode peer deployment %s", deploy.GetName())
 	return nil
 }
@@ -144,13 +171,20 @@ func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, do
 }
 
 // Wait blocks until the container stops and returns the exit code of the container.
-func (vm *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
-	// We do not support this at this time.
+func (api *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
+	podName := api.GetPodName(ccid)
+	cc := api.getInstance(podName)
+	if cc == nil {
+		return 0, fmt.Errorf("%s not found", podName)
+	}
+
+	<-*cc // wait in the chaincode stop channel to return something (or close)
+
 	return 0, nil
 }
 
 // HealthCheck checks api call used by docker for ensuring endpoint is available...
-func (vm *KubernetesAPI) HealthCheck(ctx context.Context) error {
+func (api *KubernetesAPI) HealthCheck(ctx context.Context) error {
 	// Decide what kind of check we want to do here... nothing for now.
 	return nil
 }
@@ -396,6 +430,13 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 		err := api.client.Core().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
 			GracePeriodSeconds: &grace,
 		})
+		// look for wait handle and close.
+		cc := api.getInstance(pod.Name)
+		if cc != nil {
+			close(*cc)
+			api.removeInstance(pod.Name)
+		}
+
 		if err != nil {
 			return err
 		}
