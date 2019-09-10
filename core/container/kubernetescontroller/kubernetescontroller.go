@@ -44,6 +44,40 @@ var (
 
 type getClient func() (*kubernetes.Clientset, error)
 
+// ExitHandles structure holds a conncurrent hashmap instance of references to channels
+type ExitHandles struct {
+	mutex      sync.Mutex
+	chaincodes map[string]*chan string
+}
+
+// GetInstance returns the exit channel associated with the given name
+func (handles *ExitHandles) GetInstance(name string) *chan string {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	return handles.chaincodes[name]
+}
+
+// SetInstance sets a channel associated with the given chaincode name
+func (handles *ExitHandles) SetInstance(name string, inst *chan string) {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	handles.chaincodes[name] = inst
+}
+
+// RemoveInstance removes the exit channel associated with the given chaincode name
+func (handles *ExitHandles) RemoveInstance(name string) {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	delete(handles.chaincodes, name)
+}
+
+// NewExitHandles creates a new ExitHandles registry instance
+func NewExitHandles() *ExitHandles {
+	return &ExitHandles{
+		chaincodes: make(map[string]*chan string),
+	}
+}
+
 // KubernetesAPI instance for a peer to schedule chaincodes.
 type KubernetesAPI struct {
 	client *kubernetes.Clientset
@@ -52,12 +86,11 @@ type KubernetesAPI struct {
 	Namespace    string
 	BuildMetrics *BuildMetrics
 
-	mutex      sync.Mutex
-	chaincodes map[string]*chan string
+	chaincodes *ExitHandles
 }
 
 // NewKubernetesAPI creates an instance using the environmental Kubernetes configuration
-func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
+func NewKubernetesAPI(peerID, networkID string, exitHandles *ExitHandles) *KubernetesAPI {
 	// Empty or host networks map to default kubernetes namespace.
 	namespace := viper.GetString("vm.kubernetes.namespace")
 	if len(namespace) == 0 {
@@ -77,7 +110,7 @@ func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
 	}
 
 	api.client = client
-	api.chaincodes = make(map[string]*chan string)
+	api.chaincodes = exitHandles
 
 	return &api
 }
@@ -122,27 +155,11 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(config)
 }
 
-func (api *KubernetesAPI) getInstance(name string) *chan string {
-	api.mutex.Lock()
-	defer api.mutex.Unlock()
-	return api.chaincodes[name]
-}
-
-func (api *KubernetesAPI) setInstance(name string, inst *chan string) {
-	api.mutex.Lock()
-	defer api.mutex.Unlock()
-	api.chaincodes[name] = inst
-}
-
-func (api *KubernetesAPI) removeInstance(name string) {
-	api.mutex.Lock()
-	defer api.mutex.Unlock()
-	delete(api.chaincodes, name)
-}
-
 // Start a pod in kubernetes for the chaincode
 func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
+
+	kubernetesLogger.Infof("Starting chaincode %s...", api.GetPodName(ccid))
 
 	// Clean up any existing deployments (why do this?)
 	api.stopAllInternal(ccid)
@@ -158,27 +175,37 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 
 	// Create a stop channel reference
 	ccchan := make(chan string, 1)
-	api.setInstance(api.GetPodName(ccid), &ccchan)
+	api.chaincodes.SetInstance(api.GetPodName(ccid), &ccchan)
 
-	kubernetesLogger.Infof("Started chaincode peer deployment %s", deploy.GetName())
+	kubernetesLogger.Infof("Chaincode %s started successfully.", deploy.GetName())
 	return nil
 }
 
 // Stop a running pod in kubernetes
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
+	kubernetesLogger.Infof("Stop chaincode %s requested. [kill=%t, remove=%t]", ccid.Name, !dontkill, !dontremove)
 	// Remove any existing deployments by matching labels
-	return api.stopAllInternal(ccid)
+	if !dontremove && !dontremove {
+		return api.stopAllInternal(ccid)
+	}
+
+	return nil
 }
 
 // Wait blocks until the container stops and returns the exit code of the container.
 func (api *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
 	podName := api.GetPodName(ccid)
-	cc := api.getInstance(podName)
+	kubernetesLogger.Infof("Waiting for %s to exit...", podName)
+
+	cc := api.chaincodes.GetInstance(podName)
 	if cc == nil {
+		kubernetesLogger.Errorf("Chaincode %s exit channel handle was not found.", podName)
 		return 0, fmt.Errorf("%s not found", podName)
 	}
 
 	<-*cc // wait in the chaincode stop channel to return something (or close)
+
+	kubernetesLogger.Infof("Chaincode %s exited.", podName)
 
 	return 0, nil
 }
@@ -431,10 +458,10 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 			GracePeriodSeconds: &grace,
 		})
 		// look for wait handle and close.
-		cc := api.getInstance(pod.Name)
+		cc := api.chaincodes.GetInstance(pod.Name)
 		if cc != nil {
 			close(*cc)
-			api.removeInstance(pod.Name)
+			api.chaincodes.RemoveInstance(pod.Name)
 		}
 
 		if err != nil {
