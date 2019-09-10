@@ -93,6 +93,8 @@ type Provider struct {
 	PeerID       string
 	NetworkID    string
 	BuildMetrics *BuildMetrics
+
+	exitChannels *kubernetescontroller.ExitHandles
 }
 
 // NewProvider creates a new instance of Provider
@@ -101,6 +103,7 @@ func NewProvider(peerID, networkID string, metricsProvider metrics.Provider) *Pr
 		PeerID:       peerID,
 		NetworkID:    networkID,
 		BuildMetrics: NewBuildMetrics(metricsProvider),
+		exitChannels: kubernetescontroller.NewExitHandles(),
 	}
 }
 
@@ -113,7 +116,7 @@ func (p *Provider) NewVM() container.VM {
 	}
 	// In a cluster so replace the docker connection with a kubernetes one.
 	dockerLogger.Info("Kubernetes environment detected. Using K8s API.")
-	return kubernetescontroller.NewKubernetesAPI(p.PeerID, p.NetworkID)
+	return kubernetescontroller.NewKubernetesAPI(p.PeerID, p.NetworkID, p.exitChannels)
 }
 
 // NewDockerVM returns a new DockerVM instance
