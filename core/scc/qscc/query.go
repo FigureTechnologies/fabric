@@ -10,30 +10,30 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/hyperledger/fabric-chaincode-go/shim"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/core/aclmgmt"
-	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/core/ledger"
-	"github.com/hyperledger/fabric/core/peer"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 )
 
+// LedgerGetter gets the PeerLedger associated with a channel.
+type LedgerGetter interface {
+	GetLedger(cid string) ledger.PeerLedger
+}
+
 // New returns an instance of QSCC.
 // Typically this is called once per peer.
-func New(aclProvider aclmgmt.ACLProvider) *LedgerQuerier {
+func New(aclProvider aclmgmt.ACLProvider, ledgers LedgerGetter) *LedgerQuerier {
 	return &LedgerQuerier{
 		aclProvider: aclProvider,
+		ledgers:     ledgers,
 	}
 }
 
 func (e *LedgerQuerier) Name() string              { return "qscc" }
-func (e *LedgerQuerier) Path() string              { return "github.com/hyperledger/fabric/core/scc/qscc" }
-func (e *LedgerQuerier) InitArgs() [][]byte        { return nil }
 func (e *LedgerQuerier) Chaincode() shim.Chaincode { return e }
-func (e *LedgerQuerier) InvokableExternal() bool   { return true }
-func (e *LedgerQuerier) InvokableCC2CC() bool      { return true }
-func (e *LedgerQuerier) Enabled() bool             { return true }
 
 // LedgerQuerier implements the ledger query functions, including:
 // - GetChainInfo returns BlockchainInfo
@@ -42,6 +42,7 @@ func (e *LedgerQuerier) Enabled() bool             { return true }
 // - GetTransactionByID returns a transaction
 type LedgerQuerier struct {
 	aclProvider aclmgmt.ACLProvider
+	ledgers     LedgerGetter
 }
 
 var qscclogger = flogging.MustGetLogger("qscc")
@@ -84,7 +85,7 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 		return shim.Error(fmt.Sprintf("missing 3rd argument for %s", fname))
 	}
 
-	targetLedger := peer.GetLedger(cid)
+	targetLedger := e.ledgers.GetLedger(cid)
 	if targetLedger == nil {
 		return shim.Error(fmt.Sprintf("Invalid chain ID, %s", cid))
 	}

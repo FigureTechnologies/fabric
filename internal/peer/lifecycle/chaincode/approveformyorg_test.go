@@ -11,9 +11,10 @@ import (
 	"crypto/tls"
 	"time"
 
+	pb "github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/internal/peer/lifecycle/chaincode"
 	"github.com/hyperledger/fabric/internal/peer/lifecycle/chaincode/mock"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -267,7 +268,7 @@ var _ = Describe("ApproverForMyOrg", func() {
 		Context("when the wait for event flag is enabled and the client can't connect", func() {
 			BeforeEach(func() {
 				input.WaitForEvent = true
-				input.WaitForEventTimeout = 10 * time.Millisecond
+				input.WaitForEventTimeout = 3 * time.Second
 				input.TxID = "testtx"
 				input.PeerAddresses = []string{"approvepeer0"}
 				mockDeliverClient.DeliverFilteredReturns(nil, errors.New("robusta"))
@@ -316,7 +317,9 @@ var _ = Describe("ApproverForMyOrg", func() {
 		)
 
 		BeforeEach(func() {
-			approveForMyOrgCmd = chaincode.ApproveForMyOrgCmd(nil)
+			cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+			Expect(err).To(BeNil())
+			approveForMyOrgCmd = chaincode.ApproveForMyOrgCmd(nil, cryptoProvider)
 			approveForMyOrgCmd.SetArgs([]string{
 				"--channelID=testchannel",
 				"--name=testcc",
@@ -341,7 +344,9 @@ var _ = Describe("ApproverForMyOrg", func() {
 
 		Context("when the channel config policy is specified", func() {
 			BeforeEach(func() {
-				approveForMyOrgCmd = chaincode.ApproveForMyOrgCmd(nil)
+				cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+				Expect(err).To(BeNil())
+				approveForMyOrgCmd = chaincode.ApproveForMyOrgCmd(nil, cryptoProvider)
 				approveForMyOrgCmd.SetArgs([]string{
 					"--channel-config-policy=/Channel/Application/Readers",
 					"--channelID=testchannel",

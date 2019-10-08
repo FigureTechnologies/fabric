@@ -8,12 +8,15 @@ package chaincode
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/common/cauthdsl"
 	"github.com/hyperledger/fabric/internal/peer/chaincode"
-	cb "github.com/hyperledger/fabric/protos/common"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
@@ -35,6 +38,11 @@ type PeerDeliverClient interface {
 type Signer interface {
 	Sign(msg []byte) ([]byte, error)
 	Serialize() ([]byte, error)
+}
+
+// Writer defines the interface needed for writing a file
+type Writer interface {
+	WriteFile(string, string, []byte) error
 }
 
 func signProposal(proposal *pb.Proposal, signer Signer) (*pb.SignedProposal, error) {
@@ -110,4 +118,20 @@ func createCollectionConfigPackage(collectionsConfigFile string) (*cb.Collection
 		}
 	}
 	return ccp, nil
+}
+
+func printResponseAsJSON(proposalResponse *pb.ProposalResponse, msg proto.Message, out io.Writer) error {
+	err := proto.Unmarshal(proposalResponse.Response.Payload, msg)
+	if err != nil {
+		return errors.Wrapf(err, "failed to unmarshal proposal response's response payload as type %T", msg)
+	}
+
+	bytes, err := json.MarshalIndent(msg, "", "\t")
+	if err != nil {
+		return errors.Wrap(err, "failed to marshal output")
+	}
+
+	fmt.Fprintf(out, "%s\n", string(bytes))
+
+	return nil
 }

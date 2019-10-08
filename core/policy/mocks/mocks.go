@@ -22,9 +22,9 @@ import (
 	"fmt"
 	"time"
 
+	mspproto "github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/msp"
-	mspproto "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 )
 
@@ -32,8 +32,8 @@ type MockChannelPolicyManagerGetter struct {
 	Managers map[string]policies.Manager
 }
 
-func (c *MockChannelPolicyManagerGetter) Manager(channelID string) (policies.Manager, bool) {
-	return c.Managers[channelID], true
+func (c *MockChannelPolicyManagerGetter) Manager(channelID string) policies.Manager {
+	return c.Managers[channelID]
 }
 
 type MockChannelPolicyManager struct {

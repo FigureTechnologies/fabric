@@ -9,19 +9,19 @@ package lifecycle_test
 import (
 	"fmt"
 
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/ledger/queryresult"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset/kvrwset"
+	lb "github.com/hyperledger/fabric-protos-go/peer/lifecycle"
 	"github.com/hyperledger/fabric/common/chaincode"
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle"
 	"github.com/hyperledger/fabric/core/chaincode/lifecycle/mock"
 	"github.com/hyperledger/fabric/core/chaincode/persistence"
-	ccpersistence "github.com/hyperledger/fabric/core/chaincode/persistence/intf"
+	"github.com/hyperledger/fabric/core/container"
 	"github.com/hyperledger/fabric/core/ledger"
 	ledgermock "github.com/hyperledger/fabric/core/ledger/mock"
-	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/ledger/queryresult"
-	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
-	lb "github.com/hyperledger/fabric/protos/peer/lifecycle"
 	"github.com/hyperledger/fabric/protoutil"
 
 	. "github.com/onsi/ginkgo"
@@ -40,6 +40,7 @@ var _ = Describe("Cache", func() {
 		fakePublicState     MapLedgerShim
 		fakePrivateState    MapLedgerShim
 		fakeQueryExecutor   *mock.SimpleQueryExecutor
+		chaincodeCustodian  *lifecycle.ChaincodeCustodian
 	)
 
 	BeforeEach(func() {
@@ -54,7 +55,7 @@ var _ = Describe("Cache", func() {
 		fakeCCStore.ListInstalledChaincodesReturns([]chaincode.InstalledChaincode{
 			{
 				Hash:      []byte("hash"),
-				PackageID: ccpersistence.PackageID("packageID"),
+				PackageID: "packageID",
 			},
 		}, nil)
 
@@ -71,8 +72,10 @@ var _ = Describe("Cache", func() {
 
 		fakeMetadataHandler = &mock.MetadataHandler{}
 
+		chaincodeCustodian = lifecycle.NewChaincodeCustodian()
+
 		var err error
-		c = lifecycle.NewCache(resources, "my-mspid", fakeMetadataHandler)
+		c = lifecycle.NewCache(resources, "my-mspid", fakeMetadataHandler, chaincodeCustodian)
 		Expect(err).NotTo(HaveOccurred())
 
 		channelCache = &lifecycle.ChannelCache{
@@ -116,6 +119,19 @@ var _ = Describe("Cache", func() {
 						"chaincode-name": channelCache.Chaincodes["chaincode-name"],
 					},
 				},
+				Info: &lifecycle.ChaincodeInstallInfo{
+					Label:     "chaincode-label",
+					PackageID: "packageID",
+				},
+			},
+			string(util.ComputeSHA256(protoutil.MarshalOrPanic(&lb.StateData{
+				Type: &lb.StateData_String_{String_: "notinstalled-packageID"},
+			}))): {
+				References: map[string]map[string]*lifecycle.CachedChaincodeDefinition{
+					"channel-id": {
+						"chaincode-name": channelCache.Chaincodes["chaincode-name"],
+					},
+				},
 			},
 		}
 
@@ -149,12 +165,16 @@ var _ = Describe("Cache", func() {
 		}
 	})
 
+	AfterEach(func() {
+		chaincodeCustodian.Close()
+	})
+
 	Describe("ChaincodeInfo", func() {
 		BeforeEach(func() {
 			channelCache.Chaincodes["chaincode-name"].InstallInfo = &lifecycle.ChaincodeInstallInfo{
 				Type:      "cc-type",
 				Path:      "cc-path",
-				PackageID: ccpersistence.PackageID("hash"),
+				PackageID: "hash",
 			}
 		})
 
@@ -175,13 +195,13 @@ var _ = Describe("Cache", func() {
 				InstallInfo: &lifecycle.ChaincodeInstallInfo{
 					Type:      "cc-type",
 					Path:      "cc-path",
-					PackageID: ccpersistence.PackageID("hash"),
+					PackageID: "hash",
 				},
 				Approved: true,
 			}))
 		})
 
-		Context("when the chaincode has no cache", func() {
+		Context("when the chaincode name is not in the cache", func() {
 			It("returns an error", func() {
 				_, err := c.ChaincodeInfo("channel-id", "missing-name")
 				Expect(err).To(MatchError("unknown chaincode 'missing-name' for channel 'channel-id'"))
@@ -190,8 +210,55 @@ var _ = Describe("Cache", func() {
 
 		Context("when the channel does not exist", func() {
 			It("returns an error", func() {
-				_, err := c.ChaincodeInfo("missing-channel-id", "missing-name")
+				_, err := c.ChaincodeInfo("missing-channel-id", "chaincode-name")
 				Expect(err).To(MatchError("unknown channel 'missing-channel-id'"))
+			})
+		})
+	})
+
+	Describe("ListInstalledChaincodes", func() {
+		It("returns the installed chaincodes", func() {
+			installedChaincodes := c.ListInstalledChaincodes()
+			Expect(installedChaincodes).To(Equal([]*chaincode.InstalledChaincode{
+				{
+					Label:     "chaincode-label",
+					PackageID: "packageID",
+					References: map[string][]*chaincode.Metadata{
+						"channel-id": {
+							&chaincode.Metadata{
+								Name:    "chaincode-name",
+								Version: "chaincode-version",
+							},
+						},
+					},
+				},
+			}))
+		})
+	})
+
+	Describe("GetInstalledChaincode", func() {
+		It("returns the requested installed chaincode", func() {
+			installedChaincode, err := c.GetInstalledChaincode("packageID")
+			Expect(installedChaincode).To(Equal(&chaincode.InstalledChaincode{
+				Label:     "chaincode-label",
+				PackageID: "packageID",
+				References: map[string][]*chaincode.Metadata{
+					"channel-id": {
+						&chaincode.Metadata{
+							Name:    "chaincode-name",
+							Version: "chaincode-version",
+						},
+					},
+				},
+			}))
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		Context("when the chaincode is not installed", func() {
+			It("returns an error", func() {
+				installedChaincode, err := c.GetInstalledChaincode("notinstalled-packageID")
+				Expect(installedChaincode).To(BeNil())
+				Expect(err).To(MatchError("could not find chaincode with package id 'notinstalled-packageID'"))
 			})
 		})
 	})
@@ -204,7 +271,7 @@ var _ = Describe("Cache", func() {
 			Expect(channelCache.Chaincodes["chaincode-name"].InstallInfo).To(Equal(&lifecycle.ChaincodeInstallInfo{
 				Type:      "cc-type",
 				Path:      "cc-path",
-				PackageID: ccpersistence.PackageID("packageID"),
+				PackageID: "packageID",
 			}))
 		})
 
@@ -242,7 +309,7 @@ var _ = Describe("Cache", func() {
 
 			It("wraps and returns the error", func() {
 				err := c.InitializeLocalChaincodes()
-				Expect(err.Error()).To(ContainSubstring("could not load chaincode with pakcage ID 'packageID'"))
+				Expect(err.Error()).To(ContainSubstring("could not load chaincode with package ID 'packageID'"))
 			})
 		})
 
@@ -253,7 +320,7 @@ var _ = Describe("Cache", func() {
 
 			It("wraps and returns the error", func() {
 				err := c.InitializeLocalChaincodes()
-				Expect(err.Error()).To(ContainSubstring("could not parse chaincode with pakcage ID 'packageID'"))
+				Expect(err.Error()).To(ContainSubstring("could not parse chaincode with package ID 'packageID'"))
 			})
 		})
 	})
@@ -311,20 +378,34 @@ var _ = Describe("Cache", func() {
 				Expect(channelCache.Chaincodes["chaincode-name"].InstallInfo).To(BeNil())
 			})
 
+			It("does not attempt to launch", func() {
+				err := c.Initialize("channel-id", fakeQueryExecutor)
+				Expect(err).NotTo(HaveOccurred())
+
+				fakeLauncher := &mock.ChaincodeLauncher{}
+				go chaincodeCustodian.Work(nil, nil, fakeLauncher)
+				Consistently(fakeLauncher.LaunchCallCount).Should(Equal(0))
+			})
+
 			Context("when the chaincode is installed afterwards", func() {
-				It("gets its install info set", func() {
+				It("gets its install info set and attempts to launch", func() {
 					err := c.Initialize("channel-id", fakeQueryExecutor)
 					Expect(err).NotTo(HaveOccurred())
 					c.HandleChaincodeInstalled(&persistence.ChaincodePackageMetadata{
 						Type: "some-type",
 						Path: "some-path",
-					}, ccpersistence.PackageID("different-hash"))
+					}, "different-hash")
 					Expect(channelCache.Chaincodes["chaincode-name"].InstallInfo).To(Equal(&lifecycle.ChaincodeInstallInfo{
 						Type:      "some-type",
 						Path:      "some-path",
-						PackageID: ccpersistence.PackageID("different-hash"),
+						PackageID: "different-hash",
 					}))
+
+					fakeLauncher := &mock.ChaincodeLauncher{}
+					go chaincodeCustodian.Work(nil, nil, fakeLauncher)
+					Eventually(fakeLauncher.LaunchCallCount).Should(Equal(1))
 				})
+
 			})
 		})
 
@@ -398,7 +479,7 @@ var _ = Describe("Cache", func() {
 				c.HandleChaincodeInstalled(&persistence.ChaincodePackageMetadata{
 					Type: "cc-type",
 					Path: "cc-path",
-				}, ccpersistence.PackageID("hash"))
+				}, "hash")
 			})
 
 			It("updates the install info", func() {
@@ -407,8 +488,20 @@ var _ = Describe("Cache", func() {
 				Expect(channelCache.Chaincodes["chaincode-name"].InstallInfo).To(Equal(&lifecycle.ChaincodeInstallInfo{
 					Type:      "cc-type",
 					Path:      "cc-path",
-					PackageID: ccpersistence.PackageID("hash"),
+					PackageID: "hash",
 				}))
+			})
+
+			It("tells the custodian first to build, then to launch it", func() {
+				err := c.Initialize("channel-id", fakeQueryExecutor)
+				Expect(err).NotTo(HaveOccurred())
+
+				fakeLauncher := &mock.ChaincodeLauncher{}
+				fakeBuilder := &mock.ChaincodeBuilder{}
+				buildRegistry := &container.BuildRegistry{}
+				go chaincodeCustodian.Work(buildRegistry, fakeBuilder, fakeLauncher)
+				Eventually(fakeBuilder.BuildCallCount).Should(Equal(1))
+				Eventually(fakeLauncher.LaunchCallCount).Should(Equal(1))
 			})
 		})
 
@@ -560,7 +653,7 @@ var _ = Describe("Cache", func() {
 			Expect(metadata).To(ConsistOf(
 				chaincode.Metadata{
 					Name:              "installedAndApprovedCC",
-					Version:           "chaincode-version",
+					Version:           "3",
 					Policy:            []byte("validation-parameter"),
 					CollectionsConfig: &cb.CollectionConfigPackage{},
 					Approved:          true,
@@ -568,7 +661,7 @@ var _ = Describe("Cache", func() {
 				},
 				chaincode.Metadata{
 					Name:              "ididntinstall",
-					Version:           "chaincode-version",
+					Version:           "3",
 					Policy:            []byte("validation-parameter"),
 					CollectionsConfig: &cb.CollectionConfigPackage{},
 					Approved:          true,
@@ -576,7 +669,7 @@ var _ = Describe("Cache", func() {
 				},
 				chaincode.Metadata{
 					Name:              "idontapprove",
-					Version:           "chaincode-version",
+					Version:           "3",
 					Policy:            []byte("validation-parameter"),
 					CollectionsConfig: &cb.CollectionConfigPackage{},
 					Approved:          false,
@@ -817,7 +910,7 @@ var _ = Describe("Cache", func() {
 							Path:  "cc-path",
 							Label: "label",
 						},
-						ccpersistence.PackageID("packageID-1"),
+						"packageID-1",
 					)
 				}
 

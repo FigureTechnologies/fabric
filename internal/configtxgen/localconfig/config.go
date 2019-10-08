@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/viperutil"
 	cf "github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/msp"
-	"github.com/hyperledger/fabric/protos/orderer/etcdraft"
 	"github.com/spf13/viper"
 )
 
@@ -33,9 +33,9 @@ var logger = flogging.MustGetLogger("common.tools.configtxgen.localconfig")
 var configName = strings.ToLower(Prefix)
 
 const (
-	// TestChainID is the channel name used for testing purposes when one is
+	// TestChannelID is the channel name used for testing purposes when one is
 	// not given
-	TestChainID = "testchainid"
+	TestChannelID = "testchainid"
 
 	// SampleInsecureSoloProfile references the sample profile which does not
 	// include any MSPs and uses solo for ordering.

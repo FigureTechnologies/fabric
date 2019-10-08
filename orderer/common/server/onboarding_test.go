@@ -17,12 +17,16 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/orderer"
+	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
 	deliver_mocks "github.com/hyperledger/fabric/common/deliver/mock"
 	"github.com/hyperledger/fabric/common/flogging"
 	ledger_mocks "github.com/hyperledger/fabric/common/ledger/blockledger/mocks"
-	ramledger "github.com/hyperledger/fabric/common/ledger/blockledger/ram"
+	"github.com/hyperledger/fabric/common/ledger/blockledger/ramledger"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
@@ -30,9 +34,6 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/cluster/mocks"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	server_mocks "github.com/hyperledger/fabric/orderer/common/server/mocks"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/orderer"
-	"github.com/hyperledger/fabric/protos/orderer/etcdraft"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +44,7 @@ import (
 
 func newServerNode(t *testing.T, key, cert []byte) *deliverServer {
 	srv, err := comm.NewGRPCServer("127.0.0.1:0", comm.ServerConfig{
-		SecOpts: &comm.SecureOptions{
+		SecOpts: comm.SecureOptions{
 			Key:         key,
 			Certificate: cert,
 			UseTLS:      true,
@@ -84,6 +85,9 @@ func (ds *deliverServer) Deliver(stream orderer.AtomicBroadcast_DeliverServer) e
 	}
 	if seekInfo.GetStart().GetNewest() != nil {
 		resp := <-ds.blockResponses
+		if resp == nil {
+			return nil
+		}
 		return stream.Send(resp)
 	}
 	panic(fmt.Sprintf("expected either specified or newest seek but got %v", seekInfo.GetStart()))
@@ -248,7 +252,7 @@ func TestOnboardingChannelUnavailable(t *testing.T) {
 		},
 	}
 
-	secConfig := &comm.SecureOptions{
+	secConfig := comm.SecureOptions{
 		Certificate:   cert,
 		Key:           key,
 		UseTLS:        true,
@@ -260,12 +264,16 @@ func TestOnboardingChannelUnavailable(t *testing.T) {
 	vr := &mocks.VerifierRetriever{}
 	vr.On("RetrieveVerifier", mock.Anything).Return(verifier)
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	r := &replicationInitiator{
 		verifierRetriever: vr,
 		lf:                lf,
 		logger:            flogging.MustGetLogger("testOnboarding"),
 		conf:              config,
 		secOpts:           secConfig,
+		cryptoProvider:    cryptoProvider,
 	}
 
 	type event struct {
@@ -419,6 +427,14 @@ func TestOnboardingChannelUnavailable(t *testing.T) {
 func TestReplicate(t *testing.T) {
 	t.Parallel()
 
+	clusterConfig := localconfig.Cluster{
+		ReplicationPullTimeout:  time.Hour,
+		DialTimeout:             time.Hour,
+		RPCTimeout:              time.Hour,
+		ReplicationRetryTimeout: time.Hour,
+		ReplicationBufferSize:   1,
+	}
+
 	var bootBlock common.Block
 	var bootBlockWithCorruptedPayload common.Block
 
@@ -488,7 +504,7 @@ func TestReplicate(t *testing.T) {
 		panicValue         string
 		systemLedgerHeight uint64
 		bootBlock          *common.Block
-		secOpts            *comm.SecureOptions
+		secOpts            comm.SecureOptions
 		conf               *localconfig.TopLevel
 		ledgerFactoryErr   error
 		signer             identity.SignerSerializer
@@ -518,7 +534,7 @@ func TestReplicate(t *testing.T) {
 			panicValue:         "Failed creating puller config from bootstrap block: unable to decode TLS certificate PEM: ",
 			bootBlock:          &bootBlockWithCorruptedPayload,
 			conf:               &localconfig.TopLevel{},
-			secOpts:            &comm.SecureOptions{},
+			secOpts:            comm.SecureOptions{},
 			replicateFunc: func(ri *replicationInitiator, bootstrapBlock *common.Block) {
 				ri.replicateIfNeeded(bootstrapBlock)
 			},
@@ -529,7 +545,7 @@ func TestReplicate(t *testing.T) {
 			panicValue:         "Failed extracting system channel name from bootstrap block: failed to retrieve channel id - block is empty",
 			bootBlock:          &common.Block{Header: &common.BlockHeader{Number: 100}},
 			conf:               &localconfig.TopLevel{},
-			secOpts:            &comm.SecureOptions{},
+			secOpts:            comm.SecureOptions{},
 			replicateFunc: func(ri *replicationInitiator, bootstrapBlock *common.Block) {
 				ri.replicateIfNeeded(bootstrapBlock)
 			},
@@ -541,7 +557,7 @@ func TestReplicate(t *testing.T) {
 			panicValue:         "Failed determining whether replication is needed: I/O error",
 			bootBlock:          &bootBlock,
 			conf:               &localconfig.TopLevel{},
-			secOpts: &comm.SecureOptions{
+			secOpts: comm.SecureOptions{
 				Certificate: cert,
 				Key:         key,
 			},
@@ -554,7 +570,7 @@ func TestReplicate(t *testing.T) {
 			systemLedgerHeight: 11,
 			bootBlock:          &bootBlock,
 			conf:               &localconfig.TopLevel{},
-			secOpts: &comm.SecureOptions{
+			secOpts: comm.SecureOptions{
 				Certificate: cert,
 				Key:         key,
 			},
@@ -579,16 +595,10 @@ func TestReplicate(t *testing.T) {
 			conf: &localconfig.TopLevel{
 				General: localconfig.General{
 					SystemChannel: "system",
-					Cluster: localconfig.Cluster{
-						ReplicationPullTimeout:  time.Millisecond * 100,
-						DialTimeout:             time.Millisecond * 100,
-						RPCTimeout:              time.Millisecond * 100,
-						ReplicationRetryTimeout: time.Millisecond * 100,
-						ReplicationBufferSize:   1,
-					},
+					Cluster:       clusterConfig,
 				},
 			},
-			secOpts: &comm.SecureOptions{
+			secOpts: comm.SecureOptions{
 				Certificate:   cert,
 				Key:           key,
 				UseTLS:        true,
@@ -607,16 +617,10 @@ func TestReplicate(t *testing.T) {
 			conf: &localconfig.TopLevel{
 				General: localconfig.General{
 					SystemChannel: "system",
-					Cluster: localconfig.Cluster{
-						ReplicationPullTimeout:  time.Millisecond * 100,
-						DialTimeout:             time.Millisecond * 100,
-						RPCTimeout:              time.Millisecond * 100,
-						ReplicationRetryTimeout: time.Millisecond * 100,
-						ReplicationBufferSize:   1,
-					},
+					Cluster:       clusterConfig,
 				},
 			},
-			secOpts: &comm.SecureOptions{
+			secOpts: comm.SecureOptions{
 				Certificate:   cert,
 				Key:           key,
 				UseTLS:        true,
@@ -650,16 +654,10 @@ func TestReplicate(t *testing.T) {
 			conf: &localconfig.TopLevel{
 				General: localconfig.General{
 					SystemChannel: "system",
-					Cluster: localconfig.Cluster{
-						ReplicationPullTimeout:  time.Millisecond * 100,
-						DialTimeout:             time.Millisecond * 100,
-						RPCTimeout:              time.Millisecond * 100,
-						ReplicationRetryTimeout: time.Millisecond * 100,
-						ReplicationBufferSize:   1,
-					},
+					Cluster:       clusterConfig,
 				},
 			},
-			secOpts: &comm.SecureOptions{
+			secOpts: comm.SecureOptions{
 				Certificate:   cert,
 				Key:           key,
 				UseTLS:        true,
@@ -687,14 +685,18 @@ func TestReplicate(t *testing.T) {
 			vr := &mocks.VerifierRetriever{}
 			vr.On("RetrieveVerifier", mock.Anything).Return(verifier)
 
+			cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+			assert.NoError(t, err)
+
 			r := &replicationInitiator{
 				verifierRetriever: vr,
 				lf:                lf,
 				logger:            flogging.MustGetLogger("testReplicateIfNeeded"),
 				signer:            testCase.signer,
 
-				conf:    testCase.conf,
-				secOpts: testCase.secOpts,
+				conf:           testCase.conf,
+				secOpts:        testCase.secOpts,
+				cryptoProvider: cryptoProvider,
 			}
 
 			if testCase.panicValue != "" {
@@ -873,7 +875,7 @@ func TestLedgerFactory(t *testing.T) {
 func injectConsenterCertificate(t *testing.T, block *common.Block, tlsCert []byte) {
 	env, err := protoutil.ExtractEnvelope(block, 0)
 	assert.NoError(t, err)
-	payload, err := protoutil.ExtractPayload(env)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	assert.NoError(t, err)
 	confEnv, err := configtx.UnmarshalConfigEnvelope(payload.Data)
 	assert.NoError(t, err)
@@ -901,7 +903,7 @@ func injectOrdererEndpoint(t *testing.T, block *common.Block, endpoint string) {
 	// Unwrap the layers until we reach the orderer addresses
 	env, err := protoutil.ExtractEnvelope(block, 0)
 	assert.NoError(t, err)
-	payload, err := protoutil.ExtractPayload(env)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	assert.NoError(t, err)
 	confEnv, err := configtx.UnmarshalConfigEnvelope(payload.Data)
 	assert.NoError(t, err)
@@ -1019,7 +1021,7 @@ func TestVerifierLoader(t *testing.T) {
 
 			ledgerFactory := &server_mocks.Factory{}
 			ledgerFactory.On("GetOrCreate", "mychannel").Return(ledger, testCase.ledgerGetOrCreateErr)
-			ledgerFactory.On("ChainIDs").Return([]string{"mychannel"})
+			ledgerFactory.On("ChannelIDs").Return([]string{"mychannel"})
 
 			verifierFactory := &mocks.VerifierFactory{}
 			verifierFactory.On("VerifierFromConfig", mock.Anything, "mychannel").Return(verifier, testCase.verifierFromConfigErr)
@@ -1072,6 +1074,9 @@ func TestValidateBootstrapBlock(t *testing.T) {
 	err = proto.Unmarshal(systemChannelBlockBytes, systemBlock)
 	assert.NoError(t, err)
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	for _, testCase := range []struct {
 		description   string
 		block         *common.Block
@@ -1107,7 +1112,7 @@ func TestValidateBootstrapBlock(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.description, func(t *testing.T) {
-			err := ValidateBootstrapBlock(testCase.block)
+			err := ValidateBootstrapBlock(testCase.block, cryptoProvider)
 			if testCase.expectedError == "" {
 				assert.NoError(t, err)
 				return

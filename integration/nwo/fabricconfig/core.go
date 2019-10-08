@@ -10,6 +10,7 @@ import (
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/hyperledger/fabric/core/peer"
 )
 
 type Core struct {
@@ -19,6 +20,7 @@ type Core struct {
 	Chaincode  *Chaincode  `yaml:"chaincode,omitempty"`
 	Ledger     *Ledger     `yaml:"ledger,omitempty"`
 	Operations *Operations `yaml:"operations,omitempty"`
+	Metrics    *Metrics    `yaml:"metrics,omitempty"`
 }
 
 type Logging struct {
@@ -46,7 +48,6 @@ type Peer struct {
 	LocalMSPID             string          `yaml:"localMspId,omitempty"`
 	Deliveryclient         *DeliveryClient `yaml:"deliveryclient,omitempty"`
 	LocalMspType           string          `yaml:"localMspType,omitempty"`
-	AdminService           *Service        `yaml:"adminService,omitempty"`
 	Handlers               *Handlers       `yaml:"handlers,omitempty"`
 	ValidatorPoolSize      int             `yaml:"validatorPoolSize,omitempty"`
 	Discovery              *Discovery      `yaml:"discovery,omitempty"`
@@ -194,18 +195,19 @@ type Docker struct {
 }
 
 type Chaincode struct {
-	Builder        string        `yaml:"builder,omitempty"`
-	Pull           bool          `yaml:"pull"`
-	Golang         *Golang       `yaml:"golang,omitempty"`
-	Car            *Car          `yaml:"car,omitempty"`
-	Java           *Java         `yaml:"java,omitempty"`
-	Node           *Node         `yaml:"node,omitempty"`
-	StartupTimeout time.Duration `yaml:"startupTimeout,omitempty"`
-	ExecuteTimeout time.Duration `yaml:"executeTimeout,omitempty"`
-	Mode           string        `yaml:"mode,omitempty"`
-	Keepalive      int           `yaml:"keepalive,omitempty"`
-	System         SystemFlags   `yaml:"system,omitempty"`
-	Logging        *Logging      `yaml:"logging,omitempty"`
+	Builder          string                 `yaml:"builder,omitempty"`
+	Pull             bool                   `yaml:"pull"`
+	Golang           *Golang                `yaml:"golang,omitempty"`
+	Car              *Car                   `yaml:"car,omitempty"`
+	Java             *Java                  `yaml:"java,omitempty"`
+	Node             *Node                  `yaml:"node,omitempty"`
+	StartupTimeout   time.Duration          `yaml:"startupTimeout,omitempty"`
+	ExecuteTimeout   time.Duration          `yaml:"executeTimeout,omitempty"`
+	Mode             string                 `yaml:"mode,omitempty"`
+	Keepalive        int                    `yaml:"keepalive,omitempty"`
+	System           SystemFlags            `yaml:"system,omitempty"`
+	Logging          *Logging               `yaml:"logging,omitempty"`
+	ExternalBuilders []peer.ExternalBuilder `yaml:"externalBuilders"`
 
 	ExtraProperties map[string]interface{} `yaml:",inline,omitempty"`
 }

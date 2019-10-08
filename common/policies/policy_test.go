@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
-	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/msp"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,7 +52,7 @@ func TestUnnestedManager(t *testing.T) {
 	assert.True(t, ok, "Should have found the root manager")
 	assert.Equal(t, m, r)
 
-	assert.Len(t, m.policies, len(config.Policies))
+	assert.Len(t, m.Policies, len(config.Policies))
 
 	for policyName := range config.Policies {
 		_, ok := m.GetPolicy(policyName)

@@ -9,13 +9,20 @@ package privdata
 import (
 	"bytes"
 	"crypto/rand"
+	"io/ioutil"
+	"os"
 	"sync"
 	"testing"
 
 	pb "github.com/golang/protobuf/proto"
+	fcommon "github.com/hyperledger/fabric-protos-go/common"
+	proto "github.com/hyperledger/fabric-protos-go/gossip"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/transientstore"
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/comm"
 	"github.com/hyperledger/fabric/gossip/common"
@@ -27,10 +34,6 @@ import (
 	"github.com/hyperledger/fabric/gossip/privdata/mocks"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
-	fcommon "github.com/hyperledger/fabric/protos/common"
-	proto "github.com/hyperledger/fabric/protos/gossip"
-	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -217,7 +220,7 @@ func newMockGossip(id *comm.RemotePeer) *mockGossip {
 	}
 }
 
-func (g *mockGossip) PeerFilter(channel common.ChainID, messagePredicate api.SubChannelSelectionCriteria) (filter.RoutingFilter, error) {
+func (g *mockGossip) PeerFilter(channel common.ChannelID, messagePredicate api.SubChannelSelectionCriteria) (filter.RoutingFilter, error) {
 	for _, call := range g.Mock.ExpectedCalls {
 		if call.Method == "PeerFilter" {
 			args := g.Called(channel, messagePredicate)
@@ -248,7 +251,7 @@ func (g *mockGossip) Send(msg *proto.GossipMessage, peers ...*comm.RemotePeer) {
 	}
 }
 
-func (g *mockGossip) PeersOfChannel(common.ChainID) []discovery.NetworkMember {
+func (g *mockGossip) PeersOfChannel(common.ChannelID) []discovery.NetworkMember {
 	return g.Called().Get(0).([]discovery.NetworkMember)
 }
 
@@ -285,7 +288,7 @@ func (gn *gossipNetwork) newPullerWithMetrics(metrics *metrics.PrivdataMetrics, 
 	g.network = gn
 	g.On("PeersOfChannel", mock.Anything).Return(knownMembers)
 
-	p := NewPuller(metrics, ps, g, &dataRetrieverMock{}, factory, "A", btlPullMarginDefault)
+	p := NewPuller(metrics, ps, g, &dataRetrieverMock{}, factory, "A", 10)
 	gn.peers = append(gn.peers, g)
 	return p
 }
@@ -1074,7 +1077,24 @@ func TestPullerIntegratedWithDataRetreiver(t *testing.T) {
 	p1 := gn.newPuller("p1", policyStore, factoryMock, membership(peerData{"p2", uint64(10)})...)
 	p2 := gn.newPuller("p2", policyStore, factoryMock, membership(peerData{"p1", uint64(1)})...)
 
-	dataStore := &mocks.DataStore{}
+	committer := &mocks.Committer{}
+	tempdir, err := ioutil.TempDir("", "ts")
+	if err != nil {
+		t.Fatalf("Failed to create test directory, got err %s", err)
+		return
+	}
+	storeProvider, err := transientstore.NewStoreProvider(tempdir)
+	if err != nil {
+		t.Fatalf("Failed to open store, got err %s", err)
+		return
+	}
+	store, err := storeProvider.OpenStore("test")
+	if err != nil {
+		t.Fatalf("Failed to open store, got err %s", err)
+		return
+	}
+	defer storeProvider.Close()
+	defer os.RemoveAll(tempdir)
 	result := []*ledger.TxPvtData{
 		{
 			WriteSet: &rwset.TxPvtReadWriteSet{
@@ -1098,14 +1118,14 @@ func TestPullerIntegratedWithDataRetreiver(t *testing.T) {
 		},
 	}
 
-	dataStore.On("LedgerHeight").Return(uint64(10), nil)
-	dataStore.On("GetPvtDataByNum", uint64(5), mock.Anything).Return(result, nil)
+	committer.On("LedgerHeight").Return(uint64(10), nil)
+	committer.On("GetPvtDataByNum", uint64(5), mock.Anything).Return(result, nil)
 	historyRetreiver := &mocks.ConfigHistoryRetriever{}
 	historyRetreiver.On("MostRecentCollectionConfigBelow", mock.Anything, ns1).Return(newCollectionConfig(col1), nil)
 	historyRetreiver.On("MostRecentCollectionConfigBelow", mock.Anything, ns2).Return(newCollectionConfig(col2), nil)
-	dataStore.On("GetConfigHistoryRetriever").Return(historyRetreiver, nil)
+	committer.On("GetConfigHistoryRetriever").Return(historyRetreiver, nil)
 
-	dataRetreiver := &counterDataRetreiver{PrivateDataRetriever: NewDataRetriever(dataStore), numberOfCalls: 0}
+	dataRetreiver := &counterDataRetreiver{PrivateDataRetriever: NewDataRetriever(store, committer), numberOfCalls: 0}
 	p2.PrivateDataRetriever = dataRetreiver
 
 	dig1 := &privdatacommon.DigKey{

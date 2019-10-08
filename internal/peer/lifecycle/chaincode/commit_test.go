@@ -11,9 +11,10 @@ import (
 	"crypto/tls"
 	"time"
 
+	pb "github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/internal/peer/lifecycle/chaincode"
 	"github.com/hyperledger/fabric/internal/peer/lifecycle/chaincode/mock"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -266,7 +267,7 @@ var _ = Describe("Commit", func() {
 		Context("when the wait for event flag is enabled and the client can't connect", func() {
 			BeforeEach(func() {
 				input.WaitForEvent = true
-				input.WaitForEventTimeout = 10 * time.Millisecond
+				input.WaitForEventTimeout = 3 * time.Second
 				input.TxID = "testtx"
 				input.PeerAddresses = []string{"commitpeer0"}
 				mockDeliverClient.DeliverFilteredReturns(nil, errors.New("robusta"))
@@ -315,7 +316,9 @@ var _ = Describe("Commit", func() {
 		)
 
 		BeforeEach(func() {
-			commitCmd = chaincode.CommitCmd(nil)
+			cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+			Expect(err).To(BeNil())
+			commitCmd = chaincode.CommitCmd(nil, cryptoProvider)
 			commitCmd.SetArgs([]string{
 				"--channelID=testchannel",
 				"--name=testcc",

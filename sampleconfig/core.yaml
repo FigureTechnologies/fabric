@@ -16,7 +16,7 @@ peer:
 
     # The networkId allows for logical separation of networks and is used when
     # naming docker resources.
-    networkID: dev
+    networkId: dev
 
     # The Address at local network interface this Peer will listen on.
     # By default, it will listen on all network interfaces
@@ -42,10 +42,6 @@ peer:
     # Whether the Peer should programmatically determine its address
     # This case is useful for docker containers.
     addressAutoDetect: false
-
-    # Setting for runtime.GOMAXPROCS(n). If n < 1, it does not change the
-    # current setting
-    gomaxprocs: -1
 
     # Keepalive settings for peer server and clients
     keepalive:
@@ -204,6 +200,10 @@ peer:
             reconcileSleepInterval: 1m
             # reconciliationEnabled is a flag that indicates whether private data reconciliation is enable or not.
             reconciliationEnabled: true
+            # skipPullingInvalidTransactionsDuringCommit is a flag that indicates whether pulling of invalid
+            # transaction's private data from other peers need to be skipped during the commit time and pulled
+            # only through reconciler.
+            skipPullingInvalidTransactionsDuringCommit: false
 
         # Gossip state transfer related configuration
         state:
@@ -337,16 +337,6 @@ peer:
     profile:
         enabled:     false
         listenAddress: 0.0.0.0:6060
-
-    # The admin service is used for administrative operations such as
-    # control over logger levels, etc.
-    # Only peer administrators can use the service.
-    adminService:
-        # The interface and port on which the admin server will listen on.
-        # If this is commented out, or the port number is equal to the port
-        # of the peer listen address - the admin service is attached to the
-        # peer's service (defaults to 7051).
-        #listenAddress: 0.0.0.0:7055
 
     # Handlers defines custom handlers that can filter and mutate
     # objects passing within the peer, such as:
@@ -520,6 +510,11 @@ chaincode:
         # This is an image based on node:$(NODE_VER)-alpine
         runtime: $(DOCKER_NS)/fabric-nodeenv:latest
 
+    # List of directories to treat as external builders and launchers for
+    # chaincode. The external builder detection processing will iterate over the
+    # builders in the order specified below.
+    externalBuilders: []
+
     # Timeout duration for starting up a container and waiting for Register
     # to come through. 1sec should be plenty for chaincode unit tests
     startuptimeout: 300s
@@ -556,18 +551,6 @@ chaincode:
         escc: enable
         vscc: enable
         qscc: enable
-
-    # System chaincode plugins:
-    # System chaincodes can be loaded as shared objects compiled as Go plugins.
-    # See examples/plugins/scc for an example.
-    # Plugins must be white listed in the chaincode.system section above.
-    systemPlugins:
-      # example configuration:
-      # - enabled: true
-      #   name: myscc
-      #   path: /opt/lib/myscc.so
-      #   invokableExternal: true
-      #   invokableCC2CC: true
 
     # Logging section for the chaincode container
     logging:

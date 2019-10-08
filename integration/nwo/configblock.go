@@ -8,18 +8,17 @@ package nwo
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	protosorderer "github.com/hyperledger/fabric-protos-go/orderer"
+	ectdraft_protos "github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
-	"github.com/hyperledger/fabric/protos/common"
-	protosorderer "github.com/hyperledger/fabric/protos/orderer"
-	ectdraft_protos "github.com/hyperledger/fabric/protos/orderer/etcdraft"
 	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -57,7 +56,7 @@ func GetConfig(n *Network, peer *Peer, orderer *Orderer, channel string) *common
 	Expect(err).NotTo(HaveOccurred())
 
 	// unmarshal the payload bytes
-	payload, err := protoutil.GetPayload(envelope)
+	payload, err := protoutil.UnmarshalPayload(envelope.Payload)
 	Expect(err).NotTo(HaveOccurred())
 
 	// unmarshal the config envelope bytes
@@ -132,42 +131,6 @@ func UpdateConfig(n *Network, orderer *Orderer, channel string, current, updated
 	}
 }
 
-// UpdateOrdererConfig computes, signs, and submits a configuration update which requires orderers signature and waits
-// for the update to complete.
-func UpdateOrdererConfig(n *Network, orderer *Orderer, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) {
-	tempDir, err := ioutil.TempDir("", "updateConfig")
-	Expect(err).NotTo(HaveOccurred())
-	updateFile := filepath.Join(tempDir, "update.pb")
-	defer os.RemoveAll(tempDir)
-
-	computeUpdateOrdererConfig(updateFile, n, channel, current, updated, submitter, additionalSigners...)
-
-	currentBlockNumber := CurrentConfigBlockNumber(n, submitter, orderer, channel)
-
-	Eventually(func() string {
-		sess, err := n.OrdererAdminSession(orderer, submitter, commands.ChannelUpdate{
-			ChannelID: channel,
-			Orderer:   n.OrdererAddress(orderer, ListenPort),
-			File:      updateFile,
-		})
-		if err != nil {
-			return err.Error()
-		}
-		sess.Wait(n.EventuallyTimeout)
-		if sess.ExitCode() != 0 {
-			return fmt.Sprintf("exit code is %d", sess.ExitCode())
-		}
-		if strings.Contains(string(sess.Err.Contents()), "Successfully submitted channel update") {
-			return ""
-		}
-		return fmt.Sprintf("channel update output: %s", string(sess.Err.Contents()))
-	}, n.EventuallyTimeout).Should(BeEmpty())
-
-	// wait for the block to be committed
-	ccb := func() uint64 { return CurrentConfigBlockNumber(n, submitter, orderer, channel) }
-	Eventually(ccb, n.EventuallyTimeout).Should(BeNumerically(">", currentBlockNumber))
-}
-
 // CurrentConfigBlockNumber retrieves the block number from the header of the
 // current config block. This can be used to detect when configuration change
 // has completed. If an orderer is not provided, the current config block will
@@ -227,15 +190,48 @@ func FetchConfigBlock(n *Network, peer *Peer, orderer *Orderer, channel string, 
 	Eventually(fetch, n.EventuallyTimeout).Should(Equal(0))
 }
 
-// UpdateOrdererConfigFail computes, signs, and submits a configuration update which requires orderers signature
-// and waits for the update to FAIL.
-func UpdateOrdererConfigFail(n *Network, orderer *Orderer, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) {
+// UpdateOrdererConfig computes, signs, and submits a configuration update which requires orderers signature and waits
+// for the update to complete.
+func UpdateOrdererConfig(n *Network, orderer *Orderer, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) {
 	tempDir, err := ioutil.TempDir("", "updateConfig")
 	Expect(err).NotTo(HaveOccurred())
 	updateFile := filepath.Join(tempDir, "update.pb")
 	defer os.RemoveAll(tempDir)
 
-	computeUpdateOrdererConfig(updateFile, n, channel, current, updated, submitter, additionalSigners...)
+	currentBlockNumber := CurrentConfigBlockNumber(n, submitter, orderer, channel)
+	ComputeUpdateOrdererConfig(updateFile, n, channel, current, updated, submitter, additionalSigners...)
+
+	Eventually(func() bool {
+		sess, err := n.OrdererAdminSession(orderer, submitter, commands.ChannelUpdate{
+			ChannelID: channel,
+			Orderer:   n.OrdererAddress(orderer, ListenPort),
+			File:      updateFile,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		sess.Wait(n.EventuallyTimeout)
+		if sess.ExitCode() != 0 {
+			return false
+		}
+
+		return strings.Contains(string(sess.Err.Contents()), "Successfully submitted channel update")
+	}, n.EventuallyTimeout).Should(BeTrue())
+
+	// wait for the block to be committed
+	ccb := func() uint64 { return CurrentConfigBlockNumber(n, submitter, orderer, channel) }
+	Eventually(ccb, n.EventuallyTimeout).Should(BeNumerically(">", currentBlockNumber))
+}
+
+// UpdateOrdererConfigSession computes, signs, and submits a configuration update which requires orderers signature
+// and waits for the update to complete. The command session is returned to the caller to enable ExitCode and command
+// output assertions.
+func UpdateOrdererConfigSession(n *Network, orderer *Orderer, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) *gexec.Session {
+	tempDir, err := ioutil.TempDir("", "updateConfig")
+	Expect(err).NotTo(HaveOccurred())
+	updateFile := filepath.Join(tempDir, "update.pb")
+	defer os.RemoveAll(tempDir)
+
+	ComputeUpdateOrdererConfig(updateFile, n, channel, current, updated, submitter, additionalSigners...)
 
 	//session should not return with a zero exit code nor with a success response
 	sess, err := n.OrdererAdminSession(orderer, submitter, commands.ChannelUpdate{
@@ -244,11 +240,11 @@ func UpdateOrdererConfigFail(n *Network, orderer *Orderer, channel string, curre
 		File:      updateFile,
 	})
 	Expect(err).NotTo(HaveOccurred())
-	Eventually(sess, n.EventuallyTimeout).ShouldNot(gexec.Exit(0))
-	Expect(sess.Err).NotTo(gbytes.Say("Successfully submitted channel update"))
+	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit())
+	return sess
 }
 
-func computeUpdateOrdererConfig(updateFile string, n *Network, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) {
+func ComputeUpdateOrdererConfig(updateFile string, n *Network, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Orderer) {
 	// compute update
 	configUpdate, err := update.Compute(current, updated)
 	Expect(err).NotTo(HaveOccurred())
@@ -306,6 +302,67 @@ func RemoveConsenter(n *Network, peer *Peer, orderer *Orderer, channel string, c
 
 		metadata.Consenters = newConsenters
 	})
+}
+
+// ConsenterRemover constructs configs that can be used by `UpdateOrdererConfig` to remove a consenter
+func ConsenterRemover(n *Network, peer *Peer, orderer *Orderer, channel string, certificate []byte) (current, updated *common.Config) {
+	config := GetConfig(n, peer, orderer, channel)
+	updatedConfig := proto.Clone(config).(*common.Config)
+
+	consensusTypeConfigValue := updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"]
+	consensusTypeValue := &protosorderer.ConsensusType{}
+	err := proto.Unmarshal(consensusTypeConfigValue.Value, consensusTypeValue)
+	Expect(err).NotTo(HaveOccurred())
+
+	metadata := &ectdraft_protos.ConfigMetadata{}
+	err = proto.Unmarshal(consensusTypeValue.Metadata, metadata)
+	Expect(err).NotTo(HaveOccurred())
+
+	var newConsenters []*ectdraft_protos.Consenter
+	for _, consenter := range metadata.Consenters {
+		if bytes.Equal(consenter.ClientTlsCert, certificate) || bytes.Equal(consenter.ServerTlsCert, certificate) {
+			continue
+		}
+		newConsenters = append(newConsenters, consenter)
+	}
+
+	metadata.Consenters = newConsenters
+	consensusTypeValue.Metadata, err = proto.Marshal(metadata)
+	Expect(err).NotTo(HaveOccurred())
+
+	updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"] = &common.ConfigValue{
+		ModPolicy: "Admins",
+		Value:     protoutil.MarshalOrPanic(consensusTypeValue),
+	}
+
+	return config, updatedConfig
+}
+
+// ConsenterAdder constructs configs that can be used by `UpdateOrdererConfig` to add a consenter
+func ConsenterAdder(n *Network, peer *Peer, orderer *Orderer, channel string, consenter ectdraft_protos.Consenter) (current, updated *common.Config) {
+	config := GetConfig(n, peer, orderer, channel)
+	updatedConfig := proto.Clone(config).(*common.Config)
+
+	consensusTypeConfigValue := updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"]
+	consensusTypeValue := &protosorderer.ConsensusType{}
+	err := proto.Unmarshal(consensusTypeConfigValue.Value, consensusTypeValue)
+	Expect(err).NotTo(HaveOccurred())
+
+	metadata := &ectdraft_protos.ConfigMetadata{}
+	err = proto.Unmarshal(consensusTypeValue.Metadata, metadata)
+	Expect(err).NotTo(HaveOccurred())
+
+	metadata.Consenters = append(metadata.Consenters, &consenter)
+
+	consensusTypeValue.Metadata, err = proto.Marshal(metadata)
+	Expect(err).NotTo(HaveOccurred())
+
+	updatedConfig.ChannelGroup.Groups["Orderer"].Values["ConsensusType"] = &common.ConfigValue{
+		ModPolicy: "Admins",
+		Value:     protoutil.MarshalOrPanic(consensusTypeValue),
+	}
+
+	return config, updatedConfig
 }
 
 // ConsensusMetadataMutator receives ConsensusType.Metadata and mutates it

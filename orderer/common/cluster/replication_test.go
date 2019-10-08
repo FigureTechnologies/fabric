@@ -14,6 +14,10 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/msp"
+	"github.com/hyperledger/fabric-protos-go/orderer"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/flogging"
@@ -21,9 +25,6 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/cluster/mocks"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/msp"
-	"github.com/hyperledger/fabric/protos/orderer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -196,7 +197,7 @@ func TestReplicateChainsFailures(t *testing.T) {
 				}},
 			},
 			expectedPanic: "Failed converting channel creation block for channel channelWeAreNotPartOf" +
-				" to genesis block: no payload in envelope: proto: common.Payload: illegal tag 0 (wire type 1)",
+				" to genesis block: error unmarshaling Payload: proto: common.Payload: illegal tag 0 (wire type 1)",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -856,6 +857,9 @@ func TestBlockPullerFromConfigBlockFailures(t *testing.T) {
 	validBlock := &common.Block{}
 	assert.NoError(t, proto.Unmarshal(blockBytes, validBlock))
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	for _, testCase := range []struct {
 		name         string
 		expectedErr  string
@@ -897,7 +901,7 @@ func TestBlockPullerFromConfigBlockFailures(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			verifierRetriever := &mocks.VerifierRetriever{}
 			verifierRetriever.On("RetrieveVerifier", mock.Anything).Return(&cluster.NoopBlockVerifier{})
-			bp, err := cluster.BlockPullerFromConfigBlock(testCase.pullerConfig, testCase.block, verifierRetriever)
+			bp, err := cluster.BlockPullerFromConfigBlock(testCase.pullerConfig, testCase.block, verifierRetriever, cryptoProvider)
 			assert.EqualError(t, err, testCase.expectedErr)
 			assert.Nil(t, bp)
 		})
@@ -923,7 +927,7 @@ func testBlockPullerFromConfig(t *testing.T, blockVerifiers []cluster.BlockVerif
 	osn.srv.Stop()
 	// Replace the gRPC server with a TLS one
 	osn.srv, err = comm.NewGRPCServer("127.0.0.1:0", comm.ServerConfig{
-		SecOpts: &comm.SecureOptions{
+		SecOpts: comm.SecureOptions{
 			Key:               tlsKey,
 			RequireClientCert: true,
 			Certificate:       tlsCert,
@@ -968,6 +972,9 @@ func testBlockPullerFromConfig(t *testing.T, blockVerifiers []cluster.BlockVerif
 		osn.addExpectPullAssert(0)
 	}
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	bp, err := cluster.BlockPullerFromConfigBlock(cluster.PullerConfig{
 		TLSCert:             tlsCert,
 		TLSKey:              tlsKey,
@@ -975,7 +982,7 @@ func testBlockPullerFromConfig(t *testing.T, blockVerifiers []cluster.BlockVerif
 		Channel:             "mychannel",
 		Signer:              &mocks.SignerSerializer{},
 		Timeout:             time.Hour,
-	}, validBlock, verifierRetriever)
+	}, validBlock, verifierRetriever, cryptoProvider)
 	bp.RetryTimeout = time.Millisecond * 10
 	assert.NoError(t, err)
 	defer bp.Close()
@@ -1085,7 +1092,7 @@ func injectGlobalOrdererEndpoint(t *testing.T, block *common.Block, endpoint str
 	// Unwrap the layers until we reach the orderer addresses
 	env, err := protoutil.ExtractEnvelope(block, 0)
 	assert.NoError(t, err)
-	payload, err := protoutil.ExtractPayload(env)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	assert.NoError(t, err)
 	confEnv, err := configtx.UnmarshalConfigEnvelope(payload.Data)
 	assert.NoError(t, err)
@@ -1109,7 +1116,7 @@ func injectTLSCACert(t *testing.T, block *common.Block, tlsCA []byte) {
 	// Unwrap the layers until we reach the TLS CA certificates
 	env, err := protoutil.ExtractEnvelope(block, 0)
 	assert.NoError(t, err)
-	payload, err := protoutil.ExtractPayload(env)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	assert.NoError(t, err)
 	confEnv, err := configtx.UnmarshalConfigEnvelope(payload.Data)
 	assert.NoError(t, err)
@@ -1157,7 +1164,7 @@ func TestIsNewChannelBlock(t *testing.T) {
 		},
 		{
 			name:        "corrupt payload in envelope",
-			expectedErr: "no payload in envelope: proto: common.Payload: illegal tag 0 (wire type 1)",
+			expectedErr: "error unmarshaling Payload: proto: common.Payload: illegal tag 0 (wire type 1)",
 			block: &common.Block{
 				Data: &common.BlockData{
 					Data: [][]byte{protoutil.MarshalOrPanic(&common.Envelope{

@@ -1,3 +1,15 @@
+.. note::
+
+   The following repositories now use GitHub for source control.
+   Please see the :doc:`GitHub Contributions <github/github>` page for
+   contribution guidelines for these repositories:
+
+   - `Fabric-CA <https://github.com/hyperledger/fabric-ca>`_
+   - `Fabric-Protos <https://github.com/hyperledger/fabric-protos>`_
+   - `Fabric-Chaincode-Go <https://github.com/hyperledger/fabric-chaincode-go>`_
+
+=====================
+
 Contributions Welcome!
 ======================
 
@@ -38,13 +50,34 @@ Getting a Linux Foundation account
 ----------------------------------
 
 In order to participate in the development of the Hyperledger Fabric
-project, you will need a :doc:`Linux Foundation
-account <Gerrit/lf-account>`. You will need to use your LF ID to
-access to all the Hyperledger community tools, including
-`Gerrit <https://gerrit.hyperledger.org>`__,
-`Jira <https://jira.hyperledger.org>`__,
+project, you will need a Linux Foundation
+account. Once you have a LF ID you will be able to
+access all the Hyperledger community tools, including
+`Gerrit code review <https://gerrit.hyperledger.org>`__,
+`Jira issue management <https://jira.hyperledger.org>`__,
 `RocketChat <https://chat.hyperledger.org/>`__, and the
-`Wiki <https://wiki.hyperledger.org/start>`__ (for editing, only).
+`Wiki <https://wiki.hyperledger.org/display/fabric/Hyperledger+Fabric>`__ (for editing, only).
+
+Follow the steps below to create a Linux Foundation account if you don't
+already have one.
+
+1. Go to the `Linux Foundation ID
+   website <https://identity.linuxfoundation.org/>`__.
+
+2. Select the option ``I need to create a Linux Foundation ID``, and fill
+   out the form that appears.
+
+3. Wait a few minutes, then look for an email message with the subject line:
+   "Validate your Linux Foundation ID email".
+
+4. Open the received URL to validate your email address.
+
+5. Verify that your browser displays the message
+   ``You have successfully validated your e-mail address``.
+
+6. Access `Gerrit code review <https://gerrit.hyperledger.org>`__,
+   `Jira issue management <https://jira.hyperledger.org>`__, or
+   `RocketChat <https://chat.hyperledger.org/>`__.
 
 Project Governance
 ------------------
@@ -85,9 +118,9 @@ Release cadence
 
 The Fabric maintainers have settled on a quarterly (approximately) release
 cadence (see `releases <https://github.com/hyperledger/fabric#releases>`__).
-We are also actively considering adopting an LTS (long term support) release
-process, though the details of this are still being worked out by the
-maintainers. Follow the discussion on the #fabric-maintainers channel in Chat.
+At any given time, there will be a stable LTS (long term support) release branch,
+as well as the master branch for upcoming new features.
+Follow the discussion on the #fabric-release channel in RocketChat.
 
 Making Feature/Enhancement Proposals
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -118,14 +151,14 @@ CRs will be included in a subsequent release.
 Maintainers meeting
 ~~~~~~~~~~~~~~~~~~~
 
-The maintainers hold a bi-weekly meeting every other Wednesday at 9 am ET
-on `Zoom <https://zoom.us/my/hyperledger.community>`__. Please see the
-`community calendar <https://wiki.hyperledger.org/community/calendar-public-meetings>`__
-for details.
-
+The maintainers hold regular maintainers meetings.
 The purpose of the maintainers meeting is to plan for and review the progress of
 releases, and to discuss the technical and operational direction of the project
 and sub-projects.
+
+Please see the
+`wiki <https://wiki.hyperledger.org/display/fabric/Maintainer+Meetings>`__
+for maintainer meeting details.
 
 New feature/enhancement proposals as described above should be presented to a
 maintainers meeting for consideration, feedback and acceptance.
@@ -182,7 +215,7 @@ reported, then you might add a comment that you also are interested in seeing
 the defect fixed.
 
 .. note:: If the defect is security-related, please follow the Hyperledger
-          `security bug reporting process <https://wiki.hyperledger.org/security>`__.
+          `security bug reporting process <https://wiki.hyperledger.org/display/HYP/Defect+Response>`__.
 
 If it has not been previously reported, create a new JIRA. Please try to provide
 sufficient information for someone else to reproduce the
@@ -391,7 +424,6 @@ Related Topics
    jira_navigation
    dev-setup/devenv
    dev-setup/build
-   Gerrit/lf-account
    Gerrit/gerrit
    Gerrit/changes
    Gerrit/reviewing

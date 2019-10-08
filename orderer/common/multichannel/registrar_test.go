@@ -10,24 +10,56 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	ab "github.com/hyperledger/fabric-protos-go/orderer"
+	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
-	ramledger "github.com/hyperledger/fabric/common/ledger/blockledger/ram"
+	"github.com/hyperledger/fabric/common/ledger/blockledger/ramledger"
 	"github.com/hyperledger/fabric/common/metrics/disabled"
-	mockchannelconfig "github.com/hyperledger/fabric/common/mocks/config"
-	mockpolicies "github.com/hyperledger/fabric/common/mocks/policies"
+	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	genesisconfig "github.com/hyperledger/fabric/internal/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
+	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/multichannel/mocks"
 	"github.com/hyperledger/fabric/orderer/consensus"
-	cb "github.com/hyperledger/fabric/protos/common"
-	ab "github.com/hyperledger/fabric/protos/orderer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
+
+//go:generate counterfeiter -o mocks/resources.go --fake-name Resources . resources
+
+type resources interface {
+	channelconfig.Resources
+}
+
+//go:generate counterfeiter -o mocks/orderer_config.go --fake-name OrdererConfig . ordererConfig
+
+type ordererConfig interface {
+	channelconfig.Orderer
+}
+
+//go:generate counterfeiter -o mocks/orderer_capabilities.go --fake-name OrdererCapabilities . ordererCapabilities
+
+type ordererCapabilities interface {
+	channelconfig.OrdererCapabilities
+}
+
+//go:generate counterfeiter -o mocks/channel_config.go --fake-name ChannelConfig . channelConfig
+
+type channelConfig interface {
+	channelconfig.Channel
+}
+
+//go:generate counterfeiter -o mocks/channel_capabilities.go --fake-name ChannelCapabilities . channelCapabilities
+
+type channelCapabilities interface {
+	channelconfig.ChannelCapabilities
+}
 
 //go:generate counterfeiter -o mocks/signer_serializer.go --fake-name SignerSerializer . signerSerializer
 
@@ -51,37 +83,6 @@ func newRAMLedgerAndFactory(maxSize int,
 		panic(err)
 	}
 	return rlf, rl
-}
-
-func newRAMLedgerAndFactory3Chan(maxSize int,
-	chainID string, genesisBlockSys *cb.Block,
-	chainID1 string, genesisBlockStd1 *cb.Block,
-	chainID2 string, genesisBlockStd2 *cb.Block) (blockledger.Factory, []blockledger.ReadWriter) {
-	var rls []blockledger.ReadWriter
-	rlf, rl := newRAMLedgerAndFactory(maxSize, chainID, genesisBlockSys)
-	rls = append(rls, rl)
-
-	rl, err := rlf.GetOrCreate(chainID1)
-	if err != nil {
-		panic(err)
-	}
-	err = rl.Append(genesisBlockStd1)
-	if err != nil {
-		panic(err)
-	}
-	rls = append(rls, rl)
-
-	rl, err = rlf.GetOrCreate(chainID2)
-	if err != nil {
-		panic(err)
-	}
-	err = rl.Append(genesisBlockStd2)
-	if err != nil {
-		panic(err)
-	}
-	rls = append(rls, rl)
-
-	return rlf, rls
 }
 
 func testMessageOrderAndRetrieval(maxMessageCount uint32, chainID string, chainSupport *ChainSupport, lr blockledger.ReadWriter, t *testing.T) {
@@ -109,15 +110,15 @@ func TestConfigTx(t *testing.T) {
 	// Tests for a normal chain which contains 3 config transactions and other normal transactions to make
 	// sure the right one returned
 	t.Run("GetConfigTx - ok", func(t *testing.T) {
-		_, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		_, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 		for i := 0; i < 5; i++ {
-			rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChainID, i)}))
+			rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChannelID, i)}))
 		}
-		rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeConfigTx(genesisconfig.TestChainID, 5)}))
-		ctx := makeConfigTx(genesisconfig.TestChainID, 6)
+		rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeConfigTx(genesisconfig.TestChannelID, 5)}))
+		ctx := makeConfigTx(genesisconfig.TestChannelID, 6)
 		rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{ctx}))
 
-		block := blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChainID, 7)})
+		block := blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChannelID, 7)})
 		block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(&cb.Metadata{Value: protoutil.MarshalOrPanic(&cb.LastConfig{Index: 7})})
 		rl.Append(block)
 
@@ -128,17 +129,17 @@ func TestConfigTx(t *testing.T) {
 	// Tests a chain which contains blocks with multi-transactions mixed with config txs,
 	// and a single tx which is not a config tx, none count as config blocks so nil should return
 	t.Run("GetConfigTx - failure", func(t *testing.T) {
-		_, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		_, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 		for i := 0; i < 10; i++ {
 			rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{
-				makeNormalTx(genesisconfig.TestChainID, i),
-				makeConfigTx(genesisconfig.TestChainID, i),
+				makeNormalTx(genesisconfig.TestChannelID, i),
+				makeConfigTx(genesisconfig.TestChannelID, i),
 			}))
 		}
-		rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChainID, 11)}))
+		rl.Append(blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChannelID, 11)}))
 		assert.Panics(t, func() { configTx(rl) }, "Should have panicked because there was no config tx")
 
-		block := blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChainID, 12)})
+		block := blockledger.CreateNextBlock(rl, []*cb.Envelope{makeNormalTx(genesisconfig.TestChannelID, 12)})
 		block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = []byte("bad metadata")
 		assert.Panics(t, func() { configTx(rl) }, "Should have panicked because of bad last config metadata")
 	})
@@ -149,6 +150,9 @@ func TestNewRegistrar(t *testing.T) {
 	confSys := configtxgentest.Load(genesisconfig.SampleInsecureSoloProfile)
 	genesisBlockSys := encoder.New(confSys).GenesisBlock()
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	// This test checks to make sure the orderer refuses to come up if it cannot find a system channel
 	t.Run("No system chain - failure", func(t *testing.T) {
 		lf := ramledger.New(10)
@@ -157,7 +161,7 @@ func TestNewRegistrar(t *testing.T) {
 		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
 
 		assert.Panics(t, func() {
-			NewRegistrar(lf, mockCrypto(), &disabled.Provider{}).Initialize(consenters)
+			NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider).Initialize(consenters)
 		}, "Should have panicked when starting without a system chain")
 	})
 
@@ -177,27 +181,27 @@ func TestNewRegistrar(t *testing.T) {
 		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
 
 		assert.Panics(t, func() {
-			NewRegistrar(lf, mockCrypto(), &disabled.Provider{}).Initialize(consenters)
+			NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider).Initialize(consenters)
 		}, "Two system channels should have caused panic")
 	})
 
 	// This test essentially brings the entire system up and is ultimately what main.go will replicate
 	t.Run("Correct flow", func(t *testing.T) {
-		lf, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		lf, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 
 		consenters := make(map[string]consensus.Consenter)
 		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
 
-		manager := NewRegistrar(lf, mockCrypto(), &disabled.Provider{})
+		manager := NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider)
 		manager.Initialize(consenters)
 
 		chainSupport := manager.GetChain("Fake")
 		assert.Nilf(t, chainSupport, "Should not have found a chain that was not created")
 
-		chainSupport = manager.GetChain(genesisconfig.TestChainID)
+		chainSupport = manager.GetChain(genesisconfig.TestChannelID)
 		assert.NotNilf(t, chainSupport, "Should have gotten chain which was initialized by ramledger")
 
-		testMessageOrderAndRetrieval(confSys.Orderer.BatchSize.MaxMessageCount, genesisconfig.TestChainID, chainSupport, rl, t)
+		testMessageOrderAndRetrieval(confSys.Orderer.BatchSize.MaxMessageCount, genesisconfig.TestChannelID, chainSupport, rl, t)
 	})
 }
 
@@ -206,13 +210,16 @@ func TestCreateChain(t *testing.T) {
 	confSys := configtxgentest.Load(genesisconfig.SampleInsecureSoloProfile)
 	genesisBlockSys := encoder.New(confSys).GenesisBlock()
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	t.Run("Create chain", func(t *testing.T) {
-		lf, _ := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		lf, _ := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 
 		consenters := make(map[string]consensus.Consenter)
 		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
 
-		manager := NewRegistrar(lf, mockCrypto(), &disabled.Provider{})
+		manager := NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider)
 		manager.Initialize(consenters)
 
 		ledger, err := lf.GetOrCreate("mychannel")
@@ -246,12 +253,12 @@ func TestCreateChain(t *testing.T) {
 		expectedLastConfigSeq := uint64(1)
 		newChainID := "test-new-chain"
 
-		lf, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		lf, rl := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 
 		consenters := make(map[string]consensus.Consenter)
 		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
 
-		manager := NewRegistrar(lf, mockCrypto(), &disabled.Provider{})
+		manager := NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider)
 		manager.Initialize(consenters)
 		orglessChannelConf := configtxgentest.Load(genesisconfig.SampleSingleMSPChannelProfile)
 		orglessChannelConf.Application.Organizations = nil
@@ -326,7 +333,9 @@ func TestCreateChain(t *testing.T) {
 			}
 		}
 
-		rcs := newChainSupport(manager, chainSupport.ledgerResources, consenters, mockCrypto(), blockcutter.NewMetrics(&disabled.Provider{}))
+		cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+		assert.NoError(t, err)
+		rcs := newChainSupport(manager, chainSupport.ledgerResources, consenters, mockCrypto(), blockcutter.NewMetrics(&disabled.Provider{}), cryptoProvider)
 		assert.Equal(t, expectedLastConfigSeq, rcs.lastConfigSeq, "On restart, incorrect lastConfigSeq")
 	})
 }
@@ -342,65 +351,57 @@ func testLastConfigBlockNumber(t *testing.T, block *cb.Block, expectedBlockNumbe
 }
 
 func TestResourcesCheck(t *testing.T) {
-	t.Run("GoodResources", func(t *testing.T) {
-		err := checkResources(&mockchannelconfig.Resources{
-			PolicyManagerVal: &mockpolicies.Manager{},
-			OrdererConfigVal: &mockchannelconfig.Orderer{
-				CapabilitiesVal: &mockchannelconfig.OrdererCapabilities{},
-			},
-			ChannelConfigVal: &mockchannelconfig.Channel{
-				CapabilitiesVal: &mockchannelconfig.ChannelCapabilities{},
-			},
-		})
+	mockOrderer := &mocks.OrdererConfig{}
+	mockOrdererCaps := &mocks.OrdererCapabilities{}
+	mockOrderer.CapabilitiesReturns(mockOrdererCaps)
+	mockChannel := &mocks.ChannelConfig{}
+	mockChannelCaps := &mocks.ChannelCapabilities{}
+	mockChannel.CapabilitiesReturns(mockChannelCaps)
 
+	mockResources := &mocks.Resources{}
+	mockResources.PolicyManagerReturns(&policies.ManagerImpl{})
+
+	t.Run("GoodResources", func(t *testing.T) {
+		mockResources.OrdererConfigReturns(mockOrderer, true)
+		mockResources.ChannelConfigReturns(mockChannel)
+
+		err := checkResources(mockResources)
 		assert.NoError(t, err)
 	})
 
 	t.Run("MissingOrdererConfigPanic", func(t *testing.T) {
-		err := checkResources(&mockchannelconfig.Resources{
-			PolicyManagerVal: &mockpolicies.Manager{},
-		})
+		mockResources.OrdererConfigReturns(nil, false)
 
+		err := checkResources(mockResources)
 		assert.Error(t, err)
 		assert.Regexp(t, "config does not contain orderer config", err.Error())
 	})
 
 	t.Run("MissingOrdererCapability", func(t *testing.T) {
-		err := checkResources(&mockchannelconfig.Resources{
-			PolicyManagerVal: &mockpolicies.Manager{},
-			OrdererConfigVal: &mockchannelconfig.Orderer{
-				CapabilitiesVal: &mockchannelconfig.OrdererCapabilities{
-					SupportedErr: errors.New("An error"),
-				},
-			},
-		})
+		mockResources.OrdererConfigReturns(mockOrderer, true)
+		mockOrdererCaps.SupportedReturns(errors.New("An error"))
 
+		err := checkResources(mockResources)
 		assert.Error(t, err)
 		assert.Regexp(t, "config requires unsupported orderer capabilities:", err.Error())
+
+		// reset
+		mockOrdererCaps.SupportedReturns(nil)
 	})
 
 	t.Run("MissingChannelCapability", func(t *testing.T) {
-		err := checkResources(&mockchannelconfig.Resources{
-			PolicyManagerVal: &mockpolicies.Manager{},
-			OrdererConfigVal: &mockchannelconfig.Orderer{
-				CapabilitiesVal: &mockchannelconfig.OrdererCapabilities{},
-			},
-			ChannelConfigVal: &mockchannelconfig.Channel{
-				CapabilitiesVal: &mockchannelconfig.ChannelCapabilities{
-					SupportedErr: errors.New("An error"),
-				},
-			},
-		})
+		mockChannelCaps.SupportedReturns(errors.New("An error"))
 
+		err := checkResources(mockResources)
 		assert.Error(t, err)
 		assert.Regexp(t, "config requires unsupported channel capabilities:", err.Error())
 	})
 
 	t.Run("MissingOrdererConfigPanic", func(t *testing.T) {
+		mockResources.OrdererConfigReturns(nil, false)
+
 		assert.Panics(t, func() {
-			checkResourcesOrPanic(&mockchannelconfig.Resources{
-				PolicyManagerVal: &mockpolicies.Manager{},
-			})
+			checkResourcesOrPanic(mockResources)
 		})
 	})
 }
@@ -411,14 +412,17 @@ func TestBroadcastChannelSupportRejection(t *testing.T) {
 	confSys := configtxgentest.Load(genesisconfig.SampleInsecureSoloProfile)
 	genesisBlockSys := encoder.New(confSys).GenesisBlock()
 
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	t.Run("Rejection", func(t *testing.T) {
 
-		ledgerFactory, _ := newRAMLedgerAndFactory(10, genesisconfig.TestChainID, genesisBlockSys)
+		ledgerFactory, _ := newRAMLedgerAndFactory(10, genesisconfig.TestChannelID, genesisBlockSys)
 		mockConsenters := map[string]consensus.Consenter{confSys.Orderer.OrdererType: &mockConsenter{}}
-		registrar := NewRegistrar(ledgerFactory, mockCrypto(), &disabled.Provider{})
+		registrar := NewRegistrar(localconfig.TopLevel{}, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider)
 		registrar.Initialize(mockConsenters)
 		randomValue := 1
-		configTx := makeConfigTx(genesisconfig.TestChainID, randomValue)
+		configTx := makeConfigTx(genesisconfig.TestChannelID, randomValue)
 		_, _, _, err := registrar.BroadcastChannelSupport(configTx)
 		assert.Error(t, err, "Messages of type HeaderType_CONFIG should return an error.")
 	})

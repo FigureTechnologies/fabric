@@ -11,10 +11,10 @@ import (
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	mspp "github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/msp"
-	cb "github.com/hyperledger/fabric/protos/common"
-	mspp "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 )
 
@@ -88,36 +88,40 @@ func (pr *provider) NewPolicy(data []byte) (policies.Policy, proto.Message, erro
 	}
 
 	return &policy{
-		evaluator:    compiled,
-		deserializer: pr.deserializer,
+		evaluator:               compiled,
+		deserializer:            pr.deserializer,
+		signaturePolicyEnvelope: sigPolicy,
 	}, sigPolicy, nil
 
 }
 
-type ProviderFromStruct struct {
+// EnvelopeBasedPolicyProvider allows to create a new policy from SignaturePolicyEnvelope struct instead of []byte
+type EnvelopeBasedPolicyProvider struct {
 	Deserializer msp.IdentityDeserializer
 }
 
-// NewPolicy creates a new policy based on the policy struct
-func (pr *ProviderFromStruct) NewPolicy(sigPolicy *cb.SignaturePolicyEnvelope) (policies.Policy, error) {
+// NewPolicy creates a new policy from the policy envelope
+func (pp *EnvelopeBasedPolicyProvider) NewPolicy(sigPolicy *cb.SignaturePolicyEnvelope) (policies.Policy, error) {
 	if sigPolicy == nil {
 		return nil, errors.New("invalid arguments")
 	}
 
-	compiled, err := compile(sigPolicy.Rule, sigPolicy.Identities, pr.Deserializer)
+	compiled, err := compile(sigPolicy.Rule, sigPolicy.Identities, pp.Deserializer)
 	if err != nil {
 		return nil, err
 	}
 
 	return &policy{
-		evaluator:    compiled,
-		deserializer: pr.Deserializer,
+		evaluator:               compiled,
+		deserializer:            pp.Deserializer,
+		signaturePolicyEnvelope: sigPolicy,
 	}, nil
 }
 
 type policy struct {
-	evaluator    func([]IdentityAndSignature, []bool) bool
-	deserializer msp.IdentityDeserializer
+	signaturePolicyEnvelope *cb.SignaturePolicyEnvelope
+	evaluator               func([]IdentityAndSignature, []bool) bool
+	deserializer            msp.IdentityDeserializer
 }
 
 // Evaluate takes a set of SignedData and evaluates whether this set of signatures satisfies the policy
@@ -138,4 +142,12 @@ func (p *policy) Evaluate(signatureSet []*protoutil.SignedData) error {
 		return errors.New("signature set did not satisfy policy")
 	}
 	return nil
+}
+
+func (p *policy) Convert() (*cb.SignaturePolicyEnvelope, error) {
+	if p.signaturePolicyEnvelope == nil {
+		return nil, errors.New("nil policy field")
+	}
+
+	return p.signaturePolicyEnvelope, nil
 }

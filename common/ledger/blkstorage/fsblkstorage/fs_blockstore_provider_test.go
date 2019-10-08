@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/ledger/util"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,7 +68,7 @@ func checkBlocks(t *testing.T, expectedBlocks []*common.Block, store blkstorage.
 		for txNum := 0; txNum < len(block.Data.Data); txNum++ {
 			txEnvBytes := block.Data.Data[txNum]
 			txEnv, _ := protoutil.GetEnvelopeFromBlock(txEnvBytes)
-			txid, err := extractTxID(txEnvBytes)
+			txid, err := protoutil.GetOrComputeTxIDFromEnvelope(txEnvBytes)
 			assert.NoError(t, err)
 
 			retrievedBlock, _ := store.RetrieveBlockByTxID(txid)
@@ -121,6 +121,7 @@ func TestBlockStoreProvider(t *testing.T) {
 		defer store.Shutdown()
 		stores = append(stores, store)
 	}
+	assert.Equal(t, numStores, len(stores))
 
 	storeNames, _ := provider.List()
 	assert.Equal(t, numStores, len(storeNames))

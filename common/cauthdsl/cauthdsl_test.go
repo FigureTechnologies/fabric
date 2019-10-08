@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	mb "github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/flogging/floggingtest"
 	"github.com/hyperledger/fabric/msp"
-	cb "github.com/hyperledger/fabric/protos/common"
-	mb "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,11 +37,10 @@ func (id *mockIdentity) ExpiresAt() time.Time {
 }
 
 func (id *mockIdentity) SatisfiesPrincipal(p *mb.MSPPrincipal) error {
-	if bytes.Compare(id.idBytes, p.Principal) == 0 {
-		return nil
-	} else {
+	if !bytes.Equal(id.idBytes, p.Principal) {
 		return errors.New("Principals do not match")
 	}
+	return nil
 }
 
 func (id *mockIdentity) GetIdentifier() *msp.IdentityIdentifier {
@@ -61,11 +60,10 @@ func (id *mockIdentity) GetOrganizationalUnits() []*msp.OUIdentifier {
 }
 
 func (id *mockIdentity) Verify(msg []byte, sig []byte) error {
-	if bytes.Compare(sig, invalidSignature) == 0 {
+	if bytes.Equal(sig, invalidSignature) {
 		return errors.New("Invalid signature")
-	} else {
-		return nil
 	}
+	return nil
 }
 
 func (id *mockIdentity) Serialize() ([]byte, error) {
@@ -343,7 +341,7 @@ func TestReturnNil(t *testing.T) {
 
 	spe, err := compile(policy.Rule, policy.Identities, &mockDeserializer{})
 	assert.Nil(t, spe)
-	assert.EqualError(t, err, "identity index out of range, requested -1, but identies length is 2")
+	assert.EqualError(t, err, "identity index out of range, requested -1, but identities length is 2")
 }
 
 func TestDeserializeIdentityError(t *testing.T) {

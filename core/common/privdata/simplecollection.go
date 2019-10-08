@@ -10,10 +10,10 @@ import (
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	m "github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/msp"
-	"github.com/hyperledger/fabric/protos/common"
-	m "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -29,6 +29,14 @@ type SimpleCollection struct {
 
 type SimpleCollectionPersistenceConfigs struct {
 	blockToLive uint64
+}
+
+// NewSimpleCollection returns a simple collection object based on a given
+// StaticCollectionConfig proto that has all the necessary information
+func NewSimpleCollection(collectionConfig *common.StaticCollectionConfig, deserializer msp.IdentityDeserializer) (*SimpleCollection, error) {
+	sc := &SimpleCollection{}
+	err := sc.Setup(collectionConfig, deserializer)
+	return sc, err
 }
 
 // CollectionID returns the collection's ID
@@ -132,7 +140,7 @@ func (sc *SimpleCollection) Setup(collectionConfig *common.StaticCollectionConfi
 	return nil
 }
 
-// Setup configures a simple collection object based on a given
+// setupAccessPolicy configures a simple collection object based on a given
 // StaticCollectionConfig proto that has all the necessary information
 func (sc *SimpleCollection) setupAccessPolicy(collectionPolicyConfig *common.CollectionPolicyConfig, deserializer msp.IdentityDeserializer) error {
 	var err error

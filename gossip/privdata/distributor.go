@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	protosgossip "github.com/hyperledger/fabric-protos-go/gossip"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go/transientstore"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/gossip/api"
 	gossipCommon "github.com/hyperledger/fabric/gossip/common"
@@ -25,10 +29,6 @@ import (
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/util"
 	"github.com/hyperledger/fabric/msp"
-	"github.com/hyperledger/fabric/protos/common"
-	protosgossip "github.com/hyperledger/fabric/protos/gossip"
-	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/hyperledger/fabric/protos/transientstore"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -40,14 +40,14 @@ type gossipAdapter interface {
 
 	// PeerFilter receives a SubChannelSelectionCriteria and returns a RoutingFilter that selects
 	// only peer identities that match the given criteria, and that they published their channel participation
-	PeerFilter(channel gossipCommon.ChainID, messagePredicate api.SubChannelSelectionCriteria) (filter.RoutingFilter, error)
+	PeerFilter(channel gossipCommon.ChannelID, messagePredicate api.SubChannelSelectionCriteria) (filter.RoutingFilter, error)
 
 	// IdentityInfo returns information known peer identities
 	IdentityInfo() api.PeerIdentitySet
 
 	// PeersOfChannel returns the NetworkMembers considered alive
 	// and also subscribed to the channel given
-	PeersOfChannel(gossipCommon.ChainID) []discovery.NetworkMember
+	PeersOfChannel(gossipCommon.ChannelID) []discovery.NetworkMember
 }
 
 // PvtDataDistributor interface to defines API of distributing private data
@@ -62,6 +62,14 @@ type IdentityDeserializerFactory interface {
 	// GetIdentityDeserializer returns an IdentityDeserializer
 	// instance for the specified chain
 	GetIdentityDeserializer(chainID string) msp.IdentityDeserializer
+}
+
+// IdentityDeserializerFactoryFunc is a function adapter for
+// IdentityDeserializerFactory.
+type IdentityDeserializerFactoryFunc func(chainID string) msp.IdentityDeserializer
+
+func (i IdentityDeserializerFactoryFunc) GetIdentityDeserializer(chainID string) msp.IdentityDeserializer {
+	return i(chainID)
 }
 
 // distributorImpl the implementation of the private data distributor interface
@@ -194,7 +202,7 @@ func (d *distributorImpl) getCollectionConfig(config *common.CollectionConfigPac
 func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAccessPolicy, colFilter privdata.Filter, pvtDataMsg *protoext.SignedGossipMessage) ([]*dissemination, error) {
 	var disseminationPlan []*dissemination
 
-	routingFilter, err := d.gossipAdapter.PeerFilter(gossipCommon.ChainID(d.chainID), func(signature api.PeerSignature) bool {
+	routingFilter, err := d.gossipAdapter.PeerFilter(gossipCommon.ChannelID(d.chainID), func(signature api.PeerSignature) bool {
 		return colFilter(protoutil.SignedData{
 			Data:      signature.Message,
 			Signature: signature.Signature,
@@ -223,7 +231,7 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 			peer2SendPerOrg := selectionPeers[rand.Intn(len(selectionPeers))]
 			sc := gossipgossip.SendCriteria{
 				Timeout:  d.pushAckTimeout,
-				Channel:  gossipCommon.ChainID(d.chainID),
+				Channel:  gossipCommon.ChannelID(d.chainID),
 				MaxPeers: 1,
 				MinAck:   required,
 				IsEligible: func(member discovery.NetworkMember) bool {
@@ -253,7 +261,7 @@ func (d *distributorImpl) disseminationPlanForMsg(colAP privdata.CollectionAcces
 	// collection policy parameters
 	sc := gossipgossip.SendCriteria{
 		Timeout:  d.pushAckTimeout,
-		Channel:  gossipCommon.ChainID(d.chainID),
+		Channel:  gossipCommon.ChannelID(d.chainID),
 		MaxPeers: maximumPeerCount,
 		MinAck:   requiredPeerCount,
 		IsEligible: func(member discovery.NetworkMember) bool {
@@ -292,7 +300,7 @@ func (d *distributorImpl) identitiesOfEligiblePeers(eligiblePeers []discovery.Ne
 
 func (d *distributorImpl) eligiblePeersOfChannel(routingFilter filter.RoutingFilter) []discovery.NetworkMember {
 	var eligiblePeers []discovery.NetworkMember
-	for _, peer := range d.gossipAdapter.PeersOfChannel(gossipCommon.ChainID(d.chainID)) {
+	for _, peer := range d.gossipAdapter.PeersOfChannel(gossipCommon.ChannelID(d.chainID)) {
 		if routingFilter(peer) {
 			eligiblePeers = append(eligiblePeers, peer)
 		}
