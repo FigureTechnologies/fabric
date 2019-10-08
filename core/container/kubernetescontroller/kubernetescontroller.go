@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/hyperledger/fabric/core/chaincode"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -43,6 +44,40 @@ var (
 
 type getClient func() (*kubernetes.Clientset, error)
 
+// ExitHandles structure holds a conncurrent hashmap instance of references to channels
+type ExitHandles struct {
+	mutex      sync.Mutex
+	chaincodes map[string]*chan string
+}
+
+// GetInstance returns the exit channel associated with the given name
+func (handles *ExitHandles) GetInstance(name string) *chan string {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	return handles.chaincodes[name]
+}
+
+// SetInstance sets a channel associated with the given chaincode name
+func (handles *ExitHandles) SetInstance(name string, inst *chan string) {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	handles.chaincodes[name] = inst
+}
+
+// RemoveInstance removes the exit channel associated with the given chaincode name
+func (handles *ExitHandles) RemoveInstance(name string) {
+	handles.mutex.Lock()
+	defer handles.mutex.Unlock()
+	delete(handles.chaincodes, name)
+}
+
+// NewExitHandles creates a new ExitHandles registry instance
+func NewExitHandles() *ExitHandles {
+	return &ExitHandles{
+		chaincodes: make(map[string]*chan string),
+	}
+}
+
 // KubernetesAPI instance for a peer to schedule chaincodes.
 type KubernetesAPI struct {
 	client *kubernetes.Clientset
@@ -50,10 +85,12 @@ type KubernetesAPI struct {
 	PeerID       string
 	Namespace    string
 	BuildMetrics *BuildMetrics
+
+	chaincodes *ExitHandles
 }
 
 // NewKubernetesAPI creates an instance using the environmental Kubernetes configuration
-func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
+func NewKubernetesAPI(peerID, networkID string, exitHandles *ExitHandles) *KubernetesAPI {
 	// Empty or host networks map to default kubernetes namespace.
 	namespace := viper.GetString("vm.kubernetes.namespace")
 	if len(namespace) == 0 {
@@ -73,6 +110,7 @@ func NewKubernetesAPI(peerID, networkID string) *KubernetesAPI {
 	}
 
 	api.client = client
+	api.chaincodes = exitHandles
 
 	return &api
 }
@@ -121,13 +159,13 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 	args []string, env []string, filesToUpload map[string][]byte, builder container.Builder) error {
 
+	kubernetesLogger.Infof("Starting chaincode %s...", api.GetPodName(ccid))
+
 	// Clean up any existing deployments (why do this?)
 	api.stopAllInternal(ccid)
 
 	// Inject the peer and version information.
-	//env = append(env, chaincode.E2eeConfigs(api.PeerID + "." + api.Namespace, ccid.Name, ccid.Version)...)
-	// HACK :: This lets is build without the version string we need which was removed.
-	env = append(env, chaincode.E2eeConfigs(api.PeerID+"."+api.Namespace, ccid.String(), ccid.String())...)
+	env = append(env, chaincode.E2eeConfigs(api.PeerID+"."+api.Namespace, ccid.Name, ccid.Version)...)
 
 	deploy, err := api.createChaincodePodDeployment(ccid, args, env, filesToUpload)
 	if err != nil {
@@ -135,24 +173,45 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 		return err
 	}
 
-	kubernetesLogger.Infof("Started chaincode peer deployment %s", deploy.GetName())
+	// Create a stop channel reference
+	ccchan := make(chan string, 1)
+	api.chaincodes.SetInstance(api.GetPodName(ccid), &ccchan)
+
+	kubernetesLogger.Infof("Chaincode %s started successfully.", deploy.GetName())
 	return nil
 }
 
 // Stop a running pod in kubernetes
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
+	kubernetesLogger.Infof("Stop chaincode %s requested. [kill=%t, remove=%t]", ccid.Name, !dontkill, !dontremove)
 	// Remove any existing deployments by matching labels
-	return api.stopAllInternal(ccid)
+	if !dontremove && !dontremove {
+		return api.stopAllInternal(ccid)
+	}
+
+	return nil
 }
 
 // Wait blocks until the container stops and returns the exit code of the container.
-func (vm *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
-	// Decide what kind of check we want to do here... nothing for now.
+func (api *KubernetesAPI) Wait(ccid ccintf.CCID) (int, error) {
+	podName := api.GetPodName(ccid)
+	kubernetesLogger.Infof("Waiting for %s to exit...", podName)
+
+	cc := api.chaincodes.GetInstance(podName)
+	if cc == nil {
+		kubernetesLogger.Errorf("Chaincode %s exit channel handle was not found.", podName)
+		return 0, fmt.Errorf("%s not found", podName)
+	}
+
+	<-*cc // wait in the chaincode stop channel to return something (or close)
+
+	kubernetesLogger.Infof("Chaincode %s exited.", podName)
+
 	return 0, nil
 }
 
 // HealthCheck checks api call used by docker for ensuring endpoint is available...
-func (vm *KubernetesAPI) HealthCheck(ctx context.Context) error {
+func (api *KubernetesAPI) HealthCheck(ctx context.Context) error {
 	// Decide what kind of check we want to do here... nothing for now.
 	return nil
 }
@@ -190,19 +249,16 @@ func (api *KubernetesAPI) createChaincodePodDeployment(ccid ccintf.CCID, args []
 			Labels: map[string]string{
 				"service":    "peer-chaincode",
 				"peer-owner": api.PeerID,
-				// "ccname":     ccid.Name,
-				// "ccver":      ccid.Version,
-				// HACK :: This lets is build without the version string we need which was removed.
-				"ccname": ccid.String(),
-				"ccver":  ccid.String(),
-				"cc":     podName,
+				"ccname":     ccid.Name,
+				"ccver":      ccid.Version,
+				"cc":         podName,
 			},
 		},
 		Spec: apiv1.PodSpec{
 			RestartPolicy: "Never", // If we exit for any reason rely on the Peer to reschedule.
 			Containers: []apiv1.Container{
 				{
-					Name:  "fabric-chaincode-mycc-container",
+					Name:  "fabric-chaincode-" + ccid.Name,
 					Image: api.GetChainCodeImageName(ccid),
 					Args:  args,
 					Env:   envvars,
@@ -401,6 +457,13 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 		err := api.client.Core().Pods(api.Namespace).Delete(pod.Name, &metav1.DeleteOptions{
 			GracePeriodSeconds: &grace,
 		})
+		// look for wait handle and close.
+		cc := api.chaincodes.GetInstance(pod.Name)
+		if cc != nil {
+			close(*cc)
+			api.chaincodes.RemoveInstance(pod.Name)
+		}
+
 		if err != nil {
 			return err
 		}
@@ -411,9 +474,7 @@ func (api *KubernetesAPI) stopAllInternal(ccid ccintf.CCID) error {
 // FindPeerCCPods looks for pods associated with this peer assigned to the given chaincode
 func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, error) {
 
-	//labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
-	// HACK :: This lets is build without the version string we need which was removed.
-	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid, ccid)
+	labelExp := fmt.Sprintf("peer-owner=%s, ccname=%s, ccver=%s", api.PeerID, ccid.Name, ccid.Version)
 
 	listOptions := metav1.ListOptions{
 		LabelSelector: labelExp,
@@ -425,7 +486,7 @@ func (api *KubernetesAPI) FindPeerCCPods(ccid ccintf.CCID) (*apiv1.PodList, erro
 // GetPodName composes a name for a chaincode pod based on available metadata
 func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
 	// assetledger-develop-61
-	name := ccid.String() //  HACK :: This method was removed .... .GetName()
+	name := ccid.GetName()
 
 	if api.PeerID != "" {
 		// cc-peer-0-assetledger-develop-61
@@ -442,7 +503,5 @@ func (api *KubernetesAPI) GetPodName(ccid ccintf.CCID) string {
 func (api *KubernetesAPI) GetChainCodeImageName(ccid ccintf.CCID) string {
 	ns := viper.GetString("chaincode.registry.namespace")
 	prefix := viper.GetString("chaincode.registry.prefix")
-	//return fmt.Sprintf("%s/%s-%s:%s", ns, prefix, ccid.Name, ccid.Version)
-	// HACK :: This lets is build without the version string we need which was removed.
-	return fmt.Sprintf("%s/%s-%s", ns, prefix, ccid)
+	return fmt.Sprintf("%s/%s-%s:%s", ns, prefix, ccid.Name, ccid.Version)
 }
