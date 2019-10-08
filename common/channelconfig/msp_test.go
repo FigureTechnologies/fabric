@@ -9,9 +9,11 @@ package channelconfig
 import (
 	"testing"
 
+	mspprotos "github.com/hyperledger/fabric-protos-go/msp"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/msp"
-	mspprotos "github.com/hyperledger/fabric/protos/msp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,7 +28,7 @@ func TestMSPConfigManager(t *testing.T) {
 	mspVers := []msp.MSPVersion{msp.MSPv1_0, msp.MSPv1_1}
 
 	for _, ver := range mspVers {
-		mspCH := NewMSPConfigHandler(ver)
+		mspCH := NewMSPConfigHandler(ver, factory.DefaultBCCSP)
 
 		_, err = mspCH.ProposeMSP(conf)
 		assert.NoError(t, err)
@@ -38,7 +40,7 @@ func TestMSPConfigManager(t *testing.T) {
 		msps, err := mgr.GetMSPs()
 		assert.NoError(t, err)
 
-		if msps == nil || len(msps) == 0 {
+		if len(msps) == 0 {
 			t.Fatalf("There are no MSPS in the manager")
 		}
 
@@ -49,7 +51,9 @@ func TestMSPConfigManager(t *testing.T) {
 }
 
 func TestMSPConfigFailure(t *testing.T) {
-	mspCH := NewMSPConfigHandler(msp.MSPv1_0)
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+	mspCH := NewMSPConfigHandler(msp.MSPv1_0, cryptoProvider)
 
 	// begin/propose/commit
 	t.Run("Bad proto", func(t *testing.T) {

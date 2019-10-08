@@ -10,12 +10,12 @@ import (
 	"sync"
 	"testing"
 
+	proto "github.com/hyperledger/fabric-protos-go/gossip"
 	"github.com/hyperledger/fabric/gossip/discovery"
 	"github.com/hyperledger/fabric/gossip/metrics"
 	gmetricsmocks "github.com/hyperledger/fabric/gossip/metrics/mocks"
 	"github.com/hyperledger/fabric/gossip/protoext"
 	"github.com/hyperledger/fabric/gossip/state/mocks"
-	proto "github.com/hyperledger/fabric/protos/gossip"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -24,8 +24,9 @@ import (
 func TestMetrics(t *testing.T) {
 	t.Parallel()
 	mc := &mockCommitter{Mock: &mock.Mock{}}
-	mc.On("CommitWithPvtData", mock.Anything).Return(nil)
+	mc.On("CommitLegacy", mock.Anything).Return(nil)
 	mc.On("LedgerHeight", mock.Anything).Return(uint64(100), nil).Twice()
+	mc.On("DoesPvtDataInfoExistInLedger", mock.Anything).Return(false, nil)
 	g := &mocks.GossipMock{}
 	g.On("PeersOfChannel", mock.Anything).Return([]discovery.NetworkMember{})
 	g.On("Accept", mock.Anything, false).Return(make(<-chan *proto.GossipMessage), nil)

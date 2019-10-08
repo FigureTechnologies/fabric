@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/common/flogging"
-	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"go.uber.org/zap/zapcore"
@@ -49,6 +49,15 @@ const (
 
 	// BlockValidation is the label for the policy which should validate the block signatures for the channel
 	BlockValidation = PathSeparator + ChannelPrefix + PathSeparator + OrdererPrefix + PathSeparator + "BlockValidation"
+
+	// ChannelOrdererAdmins is the label for the channel's orderer admin policy
+	ChannelOrdererAdmins = PathSeparator + ChannelPrefix + PathSeparator + OrdererPrefix + PathSeparator + "Admins"
+
+	// ChannelOrdererWriters is the label for the channel's orderer writers policy
+	ChannelOrdererWriters = PathSeparator + ChannelPrefix + PathSeparator + OrdererPrefix + PathSeparator + "Writers"
+
+	// ChannelOrdererReaders is the label for the channel's orderer readers policy
+	ChannelOrdererReaders = PathSeparator + ChannelPrefix + PathSeparator + OrdererPrefix + PathSeparator + "Readers"
 )
 
 var logger = flogging.MustGetLogger("policies")
@@ -111,6 +120,12 @@ func (ps PrincipalSet) UniqueSet() map[*msp.MSPPrincipal]int {
 	return res
 }
 
+// Converter represents a policy
+// which may be translated into a SignaturePolicyEnvelope
+type Converter interface {
+	Convert() (*cb.SignaturePolicyEnvelope, error)
+}
+
 // Policy is used to determine if a signature is valid
 type Policy interface {
 	// Evaluate takes a set of SignedData and evaluates whether this set of signatures satisfies the policy
@@ -142,16 +157,20 @@ type Provider interface {
 // ChannelPolicyManagerGetter is a support interface
 // to get access to the policy manager of a given channel
 type ChannelPolicyManagerGetter interface {
-	// Returns the policy manager associated to the passed channel
-	// and true if it was the manager requested, or false if it is the default manager
-	Manager(channelID string) (Manager, bool)
+	// Returns the policy manager associated with the specified channel.
+	Manager(channelID string) Manager
 }
+
+// PolicyManagerGetterFunc is a function adapater for ChannelPolicyManagerGetter.
+type PolicyManagerGetterFunc func(channelID string) Manager
+
+func (p PolicyManagerGetterFunc) Manager(channelID string) Manager { return p(channelID) }
 
 // ManagerImpl is an implementation of Manager and configtx.ConfigHandler
 // In general, it should only be referenced as an Impl for the configtx.ConfigManager
 type ManagerImpl struct {
 	path     string // The group level path
-	policies map[string]Policy
+	Policies map[string]Policy
 	managers map[string]*ManagerImpl
 }
 
@@ -182,7 +201,7 @@ func NewManagerImpl(path string, providers map[int32]Provider, root *cb.ConfigGr
 		var cPolicy Policy
 
 		if policy.Type == int32(cb.Policy_IMPLICIT_META) {
-			imp, err := newImplicitMetaPolicy(policy.Value, managers)
+			imp, err := NewImplicitMetaPolicy(policy.Value, managers)
 			if err != nil {
 				return nil, errors.Wrapf(err, "implicit policy %s at path %s did not compile", policyName, path)
 			}
@@ -206,14 +225,14 @@ func NewManagerImpl(path string, providers map[int32]Provider, root *cb.ConfigGr
 	}
 
 	for groupName, manager := range managers {
-		for policyName, policy := range manager.policies {
+		for policyName, policy := range manager.Policies {
 			policies[groupName+PathSeparator+policyName] = policy
 		}
 	}
 
 	return &ManagerImpl{
 		path:     path,
-		policies: policies,
+		Policies: policies,
 		managers: managers,
 	}, nil
 }
@@ -221,7 +240,7 @@ func NewManagerImpl(path string, providers map[int32]Provider, root *cb.ConfigGr
 type rejectPolicy string
 
 func (rp rejectPolicy) Evaluate(signedData []*protoutil.SignedData) error {
-	return fmt.Errorf("No such policy: '%s'", rp)
+	return errors.Errorf("no such policy: '%s'", rp)
 }
 
 // Manager returns the sub-policy manager for a given path and whether it exists
@@ -242,24 +261,43 @@ func (pm *ManagerImpl) Manager(path []string) (Manager, bool) {
 	return m.Manager(path[1:])
 }
 
-type policyLogger struct {
-	policy     Policy
+type PolicyLogger struct {
+	Policy     Policy
 	policyName string
 }
 
-func (pl *policyLogger) Evaluate(signatureSet []*protoutil.SignedData) error {
+func (pl *PolicyLogger) Evaluate(signatureSet []*protoutil.SignedData) error {
 	if logger.IsEnabledFor(zapcore.DebugLevel) {
-		logger.Debugf("== Evaluating %T Policy %s ==", pl.policy, pl.policyName)
-		defer logger.Debugf("== Done Evaluating %T Policy %s", pl.policy, pl.policyName)
+		logger.Debugf("== Evaluating %T Policy %s ==", pl.Policy, pl.policyName)
+		defer logger.Debugf("== Done Evaluating %T Policy %s", pl.Policy, pl.policyName)
 	}
 
-	err := pl.policy.Evaluate(signatureSet)
+	err := pl.Policy.Evaluate(signatureSet)
 	if err != nil {
 		logger.Debugf("Signature set did not satisfy policy %s", pl.policyName)
 	} else {
 		logger.Debugf("Signature set satisfies policy %s", pl.policyName)
 	}
 	return err
+}
+
+func (pl *PolicyLogger) Convert() (*cb.SignaturePolicyEnvelope, error) {
+	logger.Debugf("== Converting %T Policy %s ==", pl.Policy, pl.policyName)
+
+	convertiblePolicy, ok := pl.Policy.(Converter)
+	if !ok {
+		logger.Errorf("policy (name='%s',type='%T') is not convertible to SignaturePolicyEnvelope", pl.policyName, pl.Policy)
+		return nil, errors.Errorf("policy (name='%s',type='%T') is not convertible to SignaturePolicyEnvelope", pl.policyName, pl.Policy)
+	}
+
+	cp, err := convertiblePolicy.Convert()
+	if err != nil {
+		logger.Errorf("== Error Converting %T Policy %s, err %s", pl.Policy, pl.policyName, err.Error())
+	} else {
+		logger.Debugf("== Done Converting %T Policy %s", pl.Policy, pl.policyName)
+	}
+
+	return cp, err
 }
 
 // GetPolicy returns a policy and true if it was the policy requested, or false if it is the default reject policy
@@ -281,14 +319,14 @@ func (pm *ManagerImpl) GetPolicy(id string) (Policy, bool) {
 		relpath = id
 	}
 
-	policy, ok := pm.policies[relpath]
+	policy, ok := pm.Policies[relpath]
 	if !ok {
 		logger.Debugf("Returning dummy reject all policy because %s could not be found in %s/%s", id, pm.path, relpath)
 		return rejectPolicy(relpath), false
 	}
 
-	return &policyLogger{
-		policy:     policy,
+	return &PolicyLogger{
+		Policy:     policy,
 		policyName: PathSeparator + pm.path + PathSeparator + relpath,
 	}, true
 }

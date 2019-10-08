@@ -10,9 +10,9 @@ import (
 	"regexp"
 
 	"github.com/golang/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/policies"
-	cb "github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -90,7 +90,7 @@ func validateChannelID(channelID string) error {
 	// Illegal characters
 	matched := re.FindString(channelID)
 	if len(matched) != len(channelID) {
-		return errors.Errorf("channel ID '%s' contains illegal characters", channelID)
+		return errors.Errorf("'%s' contains illegal characters", channelID)
 	}
 
 	return nil
@@ -193,8 +193,8 @@ func (vi *ValidatorImpl) Validate(configEnv *cb.ConfigEnvelope) error {
 	return nil
 }
 
-// ChainID retrieves the chain ID associated with this manager
-func (vi *ValidatorImpl) ChainID() string {
+// ChannelID retrieves the channel ID associated with this manager
+func (vi *ValidatorImpl) ChannelID() string {
 	return vi.channelID
 }
 

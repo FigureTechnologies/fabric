@@ -12,26 +12,26 @@ import (
 	"fmt"
 	"time"
 
+	mspproto "github.com/hyperledger/fabric-protos-go/msp"
 	mockpolicies "github.com/hyperledger/fabric/common/mocks/policies"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/msp"
-	mspproto "github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/mock"
 )
 
 type ChannelPolicyManagerGetter struct{}
 
-func (c *ChannelPolicyManagerGetter) Manager(channelID string) (policies.Manager, bool) {
-	return &mockpolicies.Manager{Policy: &mockpolicies.Policy{Err: nil}}, false
+func (c *ChannelPolicyManagerGetter) Manager(channelID string) policies.Manager {
+	return &mockpolicies.Manager{Policy: &mockpolicies.Policy{Err: nil}}
 }
 
 type ChannelPolicyManagerGetterWithManager struct {
 	Managers map[string]policies.Manager
 }
 
-func (c *ChannelPolicyManagerGetterWithManager) Manager(channelID string) (policies.Manager, bool) {
-	return c.Managers[channelID], true
+func (c *ChannelPolicyManagerGetterWithManager) Manager(channelID string) policies.Manager {
+	return c.Managers[channelID]
 }
 
 type ChannelPolicyManager struct {

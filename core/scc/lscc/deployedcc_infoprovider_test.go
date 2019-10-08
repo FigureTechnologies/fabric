@@ -10,12 +10,12 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/scc/lscc"
 	"github.com/hyperledger/fabric/core/scc/lscc/mock"
-	"github.com/hyperledger/fabric/protos/common"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -45,7 +45,9 @@ func TestChaincodeInfo(t *testing.T) {
 
 	ccInfo1, err := ccInfoProvdier.ChaincodeInfo("", "cc1", mockQE)
 	assert.NoError(t, err)
-	assert.Equal(t, cc1, ccInfo1)
+	expectedCCInfo1 := cc1
+	expectedCCInfo1.IsLegacy = true
+	assert.Equal(t, expectedCCInfo1, ccInfo1)
 
 	ccInfo2, err := ccInfoProvdier.ChaincodeInfo("", "cc2", mockQE)
 	assert.NoError(t, err)

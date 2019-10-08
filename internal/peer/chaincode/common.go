@@ -17,15 +17,15 @@ import (
 	"sync"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-chaincode-go/shim"
+	pcommon "github.com/hyperledger/fabric-protos-go/common"
+	ab "github.com/hyperledger/fabric-protos-go/orderer"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/common/cauthdsl"
 	"github.com/hyperledger/fabric/common/util"
-	"github.com/hyperledger/fabric/core/chaincode/shim"
-	"github.com/hyperledger/fabric/core/container"
 	"github.com/hyperledger/fabric/internal/peer/common"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
-	pcommon "github.com/hyperledger/fabric/protos/common"
-	ab "github.com/hyperledger/fabric/protos/orderer"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -54,14 +54,18 @@ func getChaincodeDeploymentSpec(spec *pb.ChaincodeSpec, crtPkg bool) (*pb.Chainc
 			return nil, err
 		}
 
-		codePackageBytes, err = container.GetChaincodePackageBytes(platformRegistry, spec)
+		codePackageBytes, err = platformRegistry.GetDeploymentPayload(spec.Type.String(), spec.ChaincodeId.Path)
 		if err != nil {
-			err = errors.WithMessage(err, "error getting chaincode package bytes")
-			return nil, err
+			return nil, errors.WithMessage(err, "error getting chaincode package bytes")
 		}
+		chaincodePath, err := platformRegistry.NormalizePath(spec.Type.String(), spec.ChaincodeId.Path)
+		if err != nil {
+			return nil, errors.WithMessage(err, "failed to normalize chaincode path")
+		}
+		spec.ChaincodeId.Path = chaincodePath
 	}
-	chaincodeDeploymentSpec := &pb.ChaincodeDeploymentSpec{ChaincodeSpec: spec, CodePackage: codePackageBytes}
-	return chaincodeDeploymentSpec, nil
+
+	return &pb.ChaincodeDeploymentSpec{ChaincodeSpec: spec, CodePackage: codePackageBytes}, nil
 }
 
 // getChaincodeSpec get chaincode spec from the cli cmd pramameters
@@ -142,11 +146,11 @@ func chaincodeInvokeOrQuery(cmd *cobra.Command, invoke bool, cf *ChaincodeCmdFac
 
 	if invoke {
 		logger.Debugf("ESCC invoke result: %v", proposalResp)
-		pRespPayload, err := protoutil.GetProposalResponsePayload(proposalResp.Payload)
+		pRespPayload, err := protoutil.UnmarshalProposalResponsePayload(proposalResp.Payload)
 		if err != nil {
 			return errors.WithMessage(err, "error while unmarshaling proposal response payload")
 		}
-		ca, err := protoutil.GetChaincodeAction(pRespPayload.Extension)
+		ca, err := protoutil.UnmarshalChaincodeAction(pRespPayload.Extension)
 		if err != nil {
 			return errors.WithMessage(err, "error while unmarshaling chaincode action")
 		}
@@ -374,7 +378,7 @@ type ChaincodeCmdFactory struct {
 }
 
 // InitCmdFactory init the ChaincodeCmdFactory with default clients
-func InitCmdFactory(cmdName string, isEndorserRequired, isOrdererRequired bool) (*ChaincodeCmdFactory, error) {
+func InitCmdFactory(cmdName string, isEndorserRequired, isOrdererRequired bool, cryptoProvider bccsp.BCCSP) (*ChaincodeCmdFactory, error) {
 	var err error
 	var endorserClients []pb.EndorserClient
 	var deliverClients []pb.DeliverClient
@@ -420,7 +424,7 @@ func InitCmdFactory(cmdName string, isEndorserRequired, isOrdererRequired bool) 
 			}
 			endorserClient := endorserClients[0]
 
-			orderingEndpoints, err := common.GetOrdererEndpointOfChainFnc(channelID, signer, endorserClient)
+			orderingEndpoints, err := common.GetOrdererEndpointOfChainFnc(channelID, signer, endorserClient, cryptoProvider)
 			if err != nil {
 				return nil, errors.WithMessagef(err, "error getting channel (%s) orderer endpoint", channelID)
 			}
@@ -445,6 +449,36 @@ func InitCmdFactory(cmdName string, isEndorserRequired, isOrdererRequired bool) 
 		BroadcastClient: broadcastClient,
 		Certificate:     certificate,
 	}, nil
+}
+
+// processProposals sends a signed proposal to a set of peers, and gathers all the responses.
+func processProposals(endorserClients []pb.EndorserClient, signedProposal *pb.SignedProposal) ([]*pb.ProposalResponse, error) {
+	responsesCh := make(chan *pb.ProposalResponse, len(endorserClients))
+	errorCh := make(chan error, len(endorserClients))
+	wg := sync.WaitGroup{}
+	for _, endorser := range endorserClients {
+		wg.Add(1)
+		go func(endorser pb.EndorserClient) {
+			defer wg.Done()
+			proposalResp, err := endorser.ProcessProposal(context.Background(), signedProposal)
+			if err != nil {
+				errorCh <- err
+				return
+			}
+			responsesCh <- proposalResp
+		}(endorser)
+	}
+	wg.Wait()
+	close(responsesCh)
+	close(errorCh)
+	for err := range errorCh {
+		return nil, err
+	}
+	var responses []*pb.ProposalResponse
+	for response := range responsesCh {
+		responses = append(responses, response)
+	}
+	return responses, nil
 }
 
 // ChaincodeInvokeOrQuery invokes or queries the chaincode. If successful, the
@@ -497,13 +531,10 @@ func ChaincodeInvokeOrQuery(
 	if err != nil {
 		return nil, errors.WithMessagef(err, "error creating signed proposal for %s", funcName)
 	}
-	var responses []*pb.ProposalResponse
-	for _, endorser := range endorserClients {
-		proposalResp, err := endorser.ProcessProposal(context.Background(), signedProp)
-		if err != nil {
-			return nil, errors.WithMessagef(err, "error endorsing %s", funcName)
-		}
-		responses = append(responses, proposalResp)
+
+	responses, err := processProposals(endorserClients, signedProp)
+	if err != nil {
+		return nil, errors.WithMessagef(err, "error endorsing %s", funcName)
 	}
 
 	if len(responses) == 0 {

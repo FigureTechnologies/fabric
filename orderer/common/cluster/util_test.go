@@ -17,13 +17,15 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/msp"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/common/capabilities"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/flogging"
-	mockpolicies "github.com/hyperledger/fabric/common/mocks/policies"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
@@ -32,14 +34,24 @@ import (
 	genesisconfig "github.com/hyperledger/fabric/internal/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/cluster/mocks"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/msp"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+//go:generate counterfeiter -o mocks/policy.go --fake-name Policy . policy
+
+type policy interface {
+	policies.Policy
+}
+
+//go:generate counterfeiter -o mocks/policy_manager.go --fake-name PolicyManager . policyManager
+
+type policyManager interface {
+	policies.Manager
+}
 
 func TestParallelStubActivation(t *testing.T) {
 	t.Parallel()
@@ -78,11 +90,11 @@ func TestDialerCustomKeepAliveOptions(t *testing.T) {
 
 	clientKeyPair, err := ca.NewClientCertKeyPair()
 	clientConfig := comm.ClientConfig{
-		KaOpts: &comm.KeepaliveOptions{
+		KaOpts: comm.KeepaliveOptions{
 			ClientTimeout: time.Second * 12345,
 		},
 		Timeout: time.Millisecond * 100,
-		SecOpts: &comm.SecureOptions{
+		SecOpts: comm.SecureOptions{
 			RequireClientCert: true,
 			Key:               clientKeyPair.Key,
 			Certificate:       clientKeyPair.Cert,
@@ -138,7 +150,7 @@ func TestDialerBadConfig(t *testing.T) {
 	emptyCertificate := []byte("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----")
 	dialer := &cluster.PredicateDialer{
 		Config: comm.ClientConfig{
-			SecOpts: &comm.SecureOptions{
+			SecOpts: comm.SecureOptions{
 				UseTLS:        true,
 				ServerRootCAs: [][]byte{emptyCertificate},
 			},
@@ -163,7 +175,7 @@ func TestStandardDialer(t *testing.T) {
 	t.Parallel()
 	emptyCertificate := []byte("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----")
 	certPool := [][]byte{emptyCertificate}
-	config := comm.ClientConfig{SecOpts: &comm.SecureOptions{UseTLS: true, ServerRootCAs: certPool}}
+	config := comm.ClientConfig{SecOpts: comm.SecureOptions{UseTLS: true, ServerRootCAs: certPool}}
 	standardDialer := &cluster.StandardDialer{
 		Config: config,
 	}
@@ -518,10 +530,12 @@ func TestEndpointconfigFromConfigBlockGreenPath(t *testing.T) {
 		block, err := test.MakeGenesisBlock("mychannel")
 		assert.NoError(t, err)
 
+		cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+		assert.NoError(t, err)
 		// For a block that doesn't have per org endpoints,
 		// we take the global endpoints
 		injectGlobalOrdererEndpoint(t, block, "globalEndpoint")
-		endpointConfig, err := cluster.EndpointconfigFromConfigBlock(block)
+		endpointConfig, err := cluster.EndpointconfigFromConfigBlock(block, cryptoProvider)
 		assert.NoError(t, err)
 		assert.Len(t, endpointConfig, 1)
 		assert.Equal(t, "globalEndpoint", endpointConfig[0].Endpoint)
@@ -544,15 +558,19 @@ func TestEndpointconfigFromConfigBlockGreenPath(t *testing.T) {
 		}
 		channelGroup, err := encoder.NewChannelGroup(gConf)
 		assert.NoError(t, err)
-		bundle, err := channelconfig.NewBundle("mychannel", &common.Config{ChannelGroup: channelGroup})
+
+		cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+		assert.NoError(t, err)
+		bundle, err := channelconfig.NewBundle("mychannel", &common.Config{ChannelGroup: channelGroup}, cryptoProvider)
 		assert.NoError(t, err)
 
 		msps, err := bundle.MSPManager().GetMSPs()
 		assert.NoError(t, err)
 		caBytes := msps["SampleOrg"].GetTLSRootCerts()[0]
 
+		assert.NoError(t, err)
 		injectAdditionalTLSCAEndpointPair(t, block, "anotherEndpoint", caBytes, "fooOrg")
-		endpointConfig, err := cluster.EndpointconfigFromConfigBlock(block)
+		endpointConfig, err := cluster.EndpointconfigFromConfigBlock(block, cryptoProvider)
 		assert.NoError(t, err)
 		// And ensure that the endpoints that are taken, are the per org ones.
 		assert.Len(t, endpointConfig, 2)
@@ -577,14 +595,17 @@ func TestEndpointconfigFromConfigBlockGreenPath(t *testing.T) {
 }
 
 func TestEndpointconfigFromConfigBlockFailures(t *testing.T) {
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
 	t.Run("nil block", func(t *testing.T) {
-		certs, err := cluster.EndpointconfigFromConfigBlock(nil)
+		certs, err := cluster.EndpointconfigFromConfigBlock(nil, cryptoProvider)
 		assert.Nil(t, certs)
 		assert.EqualError(t, err, "nil block")
 	})
 
 	t.Run("nil block data", func(t *testing.T) {
-		certs, err := cluster.EndpointconfigFromConfigBlock(&common.Block{})
+		certs, err := cluster.EndpointconfigFromConfigBlock(&common.Block{}, cryptoProvider)
 		assert.Nil(t, certs)
 		assert.EqualError(t, err, "block data is nil")
 	})
@@ -592,7 +613,7 @@ func TestEndpointconfigFromConfigBlockFailures(t *testing.T) {
 	t.Run("no envelope", func(t *testing.T) {
 		certs, err := cluster.EndpointconfigFromConfigBlock(&common.Block{
 			Data: &common.BlockData{},
-		})
+		}, cryptoProvider)
 		assert.Nil(t, certs)
 		assert.EqualError(t, err, "envelope index out of bounds")
 	})
@@ -602,7 +623,7 @@ func TestEndpointconfigFromConfigBlockFailures(t *testing.T) {
 			Data: &common.BlockData{
 				Data: [][]byte{{}},
 			},
-		})
+		}, cryptoProvider)
 		assert.Nil(t, certs)
 		assert.EqualError(t, err, "failed extracting bundle from envelope: envelope header cannot be nil")
 	})
@@ -700,6 +721,8 @@ func TestBlockValidationPolicyVerifier(t *testing.T) {
 	group, err := encoder.NewChannelGroup(config)
 	assert.NoError(t, err)
 	assert.NotNil(t, group)
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
 
 	validConfigEnvelope := &common.ConfigEnvelope{
 		Config: &common.Config{
@@ -712,47 +735,52 @@ func TestBlockValidationPolicyVerifier(t *testing.T) {
 		expectedError string
 		envelope      *common.ConfigEnvelope
 		policyMap     map[string]policies.Policy
+		policy        policies.Policy
 	}{
+		/**
 		{
 			description:   "policy not found",
 			expectedError: "policy /Channel/Orderer/BlockValidation wasn't found",
 		},
+		*/
 		{
 			description:   "policy evaluation fails",
 			expectedError: "invalid signature",
-			policyMap: map[string]policies.Policy{
-				"/Channel/Orderer/BlockValidation": &mockpolicies.Policy{
-					Err: errors.New("invalid signature"),
+			policy: &mocks.Policy{
+				EvaluateStub: func([]*protoutil.SignedData) error {
+					return errors.New("invalid signature")
 				},
 			},
 		},
 		{
 			description:   "bad config envelope",
 			expectedError: "config must contain a channel group",
-			policyMap: map[string]policies.Policy{
-				"/Channel/Orderer/BlockValidation": &mockpolicies.Policy{
-					Err: errors.New("invalid signature"),
-				},
-			},
-			envelope: &common.ConfigEnvelope{Config: &common.Config{}},
+			policy:        &mocks.Policy{},
+			envelope:      &common.ConfigEnvelope{Config: &common.Config{}},
 		},
 		{
 			description: "good config envelope overrides custom policy manager",
-			policyMap: map[string]policies.Policy{
-				"/Channel/Orderer/BlockValidation": &mockpolicies.Policy{
-					Err: errors.New("invalid signature"),
+			policy: &mocks.Policy{
+				EvaluateStub: func([]*protoutil.SignedData) error {
+					return errors.New("invalid signature")
 				},
 			},
 			envelope: validConfigEnvelope,
 		},
 	} {
 		t.Run(testCase.description, func(t *testing.T) {
+			mockPolicyManager := &mocks.PolicyManager{}
+			if testCase.policy != nil {
+				mockPolicyManager.GetPolicyReturns(testCase.policy, true)
+			} else {
+				mockPolicyManager.GetPolicyReturns(nil, false)
+			}
+			mockPolicyManager.GetPolicyReturns(testCase.policy, true)
 			verifier := &cluster.BlockValidationPolicyVerifier{
-				Logger:  flogging.MustGetLogger("test"),
-				Channel: "mychannel",
-				PolicyMgr: &mockpolicies.Manager{
-					PolicyMap: testCase.policyMap,
-				},
+				Logger:    flogging.MustGetLogger("test"),
+				Channel:   "mychannel",
+				PolicyMgr: mockPolicyManager,
+				BCCSP: cryptoProvider,
 			}
 
 			err := verifier.VerifyBlockSignature(nil, testCase.envelope)
@@ -771,9 +799,11 @@ func TestBlockVerifierAssembler(t *testing.T) {
 	group, err := encoder.NewChannelGroup(config)
 	assert.NoError(t, err)
 	assert.NotNil(t, group)
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
 
 	t.Run("Good config envelope", func(t *testing.T) {
-		bva := &cluster.BlockVerifierAssembler{}
+		bva := &cluster.BlockVerifierAssembler{BCCSP: cryptoProvider}
 		verifier, err := bva.VerifierFromConfig(&common.ConfigEnvelope{
 			Config: &common.Config{
 				ChannelGroup: group,
@@ -785,7 +815,7 @@ func TestBlockVerifierAssembler(t *testing.T) {
 	})
 
 	t.Run("Bad config envelope", func(t *testing.T) {
-		bva := &cluster.BlockVerifierAssembler{}
+		bva := &cluster.BlockVerifierAssembler{BCCSP: cryptoProvider}
 		_, err := bva.VerifierFromConfig(&common.ConfigEnvelope{}, "mychannel")
 		assert.EqualError(t, err, "failed extracting bundle from envelope: channelconfig Config cannot be nil")
 	})
@@ -1060,7 +1090,7 @@ func injectAdditionalTLSCAEndpointPair(t *testing.T, block *common.Block, endpoi
 	// Unwrap the layers until we reach the orderer addresses
 	env, err := protoutil.ExtractEnvelope(block, 0)
 	assert.NoError(t, err)
-	payload, err := protoutil.ExtractPayload(env)
+	payload, err := protoutil.UnmarshalPayload(env.Payload)
 	assert.NoError(t, err)
 	confEnv, err := configtx.UnmarshalConfigEnvelope(payload.Data)
 	assert.NoError(t, err)

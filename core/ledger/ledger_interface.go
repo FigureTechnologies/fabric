@@ -11,13 +11,14 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-lib-go/healthz"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset/kvrwset"
+	"github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp"
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/core/ledger/util/couchdb"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
-	"github.com/hyperledger/fabric/protos/peer"
 )
 
 // Initializer encapsulates dependencies for PeerLedgerProvider
@@ -29,37 +30,34 @@ type Initializer struct {
 	MetricsProvider                 metrics.Provider
 	HealthCheckRegistry             HealthCheckRegistry
 	Config                          *Config
+	CustomTxProcessors              map[common.HeaderType]CustomTxProcessor
+	Hasher                          Hasher
 }
 
 // Config is a structure used to configure a ledger provider.
 type Config struct {
 	// RootFSPath is the top-level directory where ledger files are stored.
 	RootFSPath string
-	// StateDB holds the configuration parameters for the state database.
-	StateDB *StateDB
-	// PrivateData holds the configuration parameters for the private data store.
-	PrivateData *PrivateData
-	// HistoryDB holds the configuration parameters for the transaction history database.
-	HistoryDB *HistoryDB
+	// StateDBConfig holds the configuration parameters for the state database.
+	StateDBConfig *StateDBConfig
+	// PrivateDataConfig holds the configuration parameters for the private data store.
+	PrivateDataConfig *PrivateDataConfig
+	// HistoryDBConfig holds the configuration parameters for the transaction history database.
+	HistoryDBConfig *HistoryDBConfig
 }
 
-// State is a structure used to configure the state parameters for the ledger.
-type StateDB struct {
-	// StateDatabase is the of database to use for storing last known state.  The
+// StateDBConfig is a structure used to configure the state parameters for the ledger.
+type StateDBConfig struct {
+	// StateDatabase is the database to use for storing last known state.  The
 	// two supported options are "goleveldb" and "CouchDB".
 	StateDatabase string
-	// LevelDBPath is filesystem path that is used when StateDatabase is set
-	// to "goleveldb".
-	LevelDBPath string
 	// CouchDB is the configuration for CouchDB.  It is used when StateDatabase
 	// is set to "CouchDB".
 	CouchDB *couchdb.Config
 }
 
-// PrivateData is a structure used to configure a private data storage provider.
-type PrivateData struct {
-	// StorePath is the filesystem path used by the private data store.
-	StorePath string
+// PrivateDataConfig is a structure used to configure a private data storage provider.
+type PrivateDataConfig struct {
 	// BatchesInterval is the minimum duration (milliseconds) between batches
 	// for converting ineligible missing data entries into eligible entries.
 	BatchesInterval int
@@ -71,8 +69,8 @@ type PrivateData struct {
 	PurgeInterval int
 }
 
-// HistoryDB is a structure used to configure the transaction history database.
-type HistoryDB struct {
+// HistoryDBConfig is a structure used to configure the transaction history database.
+type HistoryDBConfig struct {
 	Enabled bool
 }
 
@@ -124,17 +122,24 @@ type PeerLedger interface {
 	// The pvt data is filtered by the list of 'ns/collections' supplied in the filter
 	// A nil filter does not filter any results and causes retrieving all the pvt data for the given blockNum
 	GetPvtDataByNum(blockNum uint64, filter PvtNsCollFilter) ([]*TxPvtData, error)
-	// CommitWithPvtData commits the block and the corresponding pvt data in an atomic operation
-	CommitWithPvtData(blockAndPvtdata *BlockAndPvtData) error
+	// CommitLegacy commits the block and the corresponding pvt data in an atomic operation following the v14 validation/commit path
+	// TODO: add a new Commit() path that replaces CommitLegacy() for the validation refactor described in FAB-12221
+	CommitLegacy(blockAndPvtdata *BlockAndPvtData, commitOpts *CommitOptions) error
 	// GetConfigHistoryRetriever returns the ConfigHistoryRetriever
 	GetConfigHistoryRetriever() (ConfigHistoryRetriever, error)
 	// CommitPvtDataOfOldBlocks commits the private data corresponding to already committed block
 	// If hashes for some of the private data supplied in this function does not match
 	// the corresponding hash present in the block, the unmatched private data is not
 	// committed and instead the mismatch inforation is returned back
-	CommitPvtDataOfOldBlocks(blockPvtData []*BlockPvtData) ([]*PvtdataHashMismatch, error)
+	CommitPvtDataOfOldBlocks(reconciledPvtdata []*ReconciledPvtdata) ([]*PvtdataHashMismatch, error)
 	// GetMissingPvtDataTracker return the MissingPvtDataTracker
 	GetMissingPvtDataTracker() (MissingPvtDataTracker, error)
+	// DoesPvtDataInfoExist returns true when
+	// (1) the ledger has pvtdata associated with the given block number (or)
+	// (2) a few or all pvtdata associated with the given block number is missing but the
+	//     missing info is recorded in the ledger (or)
+	// (3) the block is committed and does not contain any pvtData.
+	DoesPvtDataInfoExist(blockNum uint64) (bool, error)
 }
 
 // SimpleQueryExecutor encapsulates basic functions
@@ -290,8 +295,8 @@ type BlockAndPvtData struct {
 	MissingPvtData TxMissingPvtDataMap
 }
 
-// BlockPvtData contains the private data for a block
-type BlockPvtData struct {
+// ReconciledPvtdata contains the private data for a block for reconciliation
+type ReconciledPvtdata struct {
 	BlockNum  uint64
 	WriteSets TxPvtDataMap
 }
@@ -299,6 +304,42 @@ type BlockPvtData struct {
 // Add adds a given missing private data in the MissingPrivateDataList
 func (txMissingPvtData TxMissingPvtDataMap) Add(txNum uint64, ns, coll string, isEligible bool) {
 	txMissingPvtData[txNum] = append(txMissingPvtData[txNum], &MissingPvtData{ns, coll, isEligible})
+}
+
+// RetrievedPvtdata is a dependency that is implemented by coordinator/gossip for ledger
+// to be able to purge the transactions from the block after retrieving private data
+type RetrievedPvtdata interface {
+	GetBlockPvtdata() *BlockPvtdata
+	Purge()
+}
+
+// TxPvtdataInfo captures information about the requested private data to be retrieved
+// and is populated by ledger during commit
+type TxPvtdataInfo struct {
+	TxID                  string
+	Invalid               bool
+	SeqInBlock            uint64
+	CollectionPvtdataInfo []*CollectionPvtdataInfo
+}
+
+// CollectionPvtdataInfo contains information about the private data for a given collection
+type CollectionPvtdataInfo struct {
+	Namespace, Collection string
+	ExpectedHash          []byte
+	CollectionConfig      *common.StaticCollectionConfig
+	Endorsers             []*peer.Endorsement
+}
+
+// BlockPvtdata contains the retrieved private data as well as missing and ineligible
+// private data for use at commit time
+type BlockPvtdata struct {
+	PvtData        TxPvtDataMap
+	MissingPvtData TxMissingPvtDataMap
+}
+
+// CommitOptions encapsulates options associated with a block commit.
+type CommitOptions struct {
+	FetchPvtDataFromLedger bool
 }
 
 // PvtCollFilter represents the set of the collection names (as keys of the map with value 'true')
@@ -379,7 +420,7 @@ func (txSim *TxSimulationResults) ContainsPvtWrites() bool {
 // the `stateUpdates` parameter passed to the function captures the state changes caused by the block
 // for the namespace. The actual data type of stateUpdates depends on the data model enabled.
 // For instance, for KV data model, the actual type would be proto message
-// `github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset.KVWrite`
+// `github.com/hyperledger/fabric-protos-go/ledger/rwset/kvrwset.KVWrite`
 // Function `HandleStateUpdates` is expected to be invoked before block is committed and if this
 // function returns an error, the ledger implementation is expected to halt block commit operation
 // and result in a panic.
@@ -525,15 +566,14 @@ type DeployedChaincodeInfo struct {
 	Version                     string
 	ExplicitCollectionConfigPkg *common.CollectionConfigPackage
 	ImplicitCollections         []*common.StaticCollectionConfig
+	IsLegacy                    bool
 }
 
 // GetAllCollectionsConfigPkg returns a combined collection config pkg that contains both explicit and implicit collections
 func (dci DeployedChaincodeInfo) AllCollectionsConfigPkg() *common.CollectionConfigPackage {
 	var combinedColls []*common.CollectionConfig
 	if dci.ExplicitCollectionConfigPkg != nil {
-		for _, explicitColl := range dci.ExplicitCollectionConfigPkg.Config {
-			combinedColls = append(combinedColls, explicitColl)
-		}
+		combinedColls = append(combinedColls, dci.ExplicitCollectionConfigPkg.Config...)
 	}
 	for _, implicitColl := range dci.ImplicitCollections {
 		c := &common.CollectionConfig{}
@@ -608,6 +648,35 @@ type ChaincodeLifecycleEventProvider interface {
 	RegisterListener(channelID string, listener ChaincodeLifecycleEventListener)
 }
 
+// CustomTxProcessor allows to generate simulation results during commit time for custom transactions.
+// A custom processor may represent the information in a propriety fashion and can use this process to translate
+// the information into the form of `TxSimulationResults`. Because, the original information is signed in a
+// custom representation, an implementation of a `Processor` should be cautious that the custom representation
+// is used for simulation in an deterministic fashion and should take care of compatibility cross fabric versions.
+// 'initializingLedger' true indicates that either the transaction being processed is from the genesis block or the ledger is
+// synching the state (which could happen during peer startup if the statedb is found to be lagging behind the blockchain).
+// In the former case, the transactions processed are expected to be valid and in the latter case, only valid transactions
+// are reprocessed and hence any validation can be skipped.
+type CustomTxProcessor interface {
+	GenerateSimulationResults(txEnvelop *common.Envelope, simulator TxSimulator, initializingLedger bool) error
+}
+
+// InvalidTxError is expected to be thrown by a custom transaction processor
+// if it wants the ledger to record a particular transaction as invalid
+type InvalidTxError struct {
+	Msg string
+}
+
+func (e *InvalidTxError) Error() string {
+	return e.Msg
+}
+
+// Hasher implements the hash function that should be used for all ledger components.
+// Currently works at a stepping stone to decrease surface area of bccsp
+type Hasher interface {
+	Hash(msg []byte, opts bccsp.HashOpts) (hash []byte, err error)
+}
+
 //go:generate counterfeiter -o mock/state_listener.go -fake-name StateListener . StateListener
 //go:generate counterfeiter -o mock/query_executor.go -fake-name QueryExecutor . QueryExecutor
 //go:generate counterfeiter -o mock/tx_simulator.go -fake-name TxSimulator . TxSimulator
@@ -615,3 +684,4 @@ type ChaincodeLifecycleEventProvider interface {
 //go:generate counterfeiter -o mock/membership_info_provider.go -fake-name MembershipInfoProvider . MembershipInfoProvider
 //go:generate counterfeiter -o mock/health_check_registry.go -fake-name HealthCheckRegistry . HealthCheckRegistry
 //go:generate counterfeiter -o mock/cc_event_listener.go -fake-name ChaincodeLifecycleEventListener . ChaincodeLifecycleEventListener
+//go:generate counterfeiter -o mock/custom_tx_processor.go -fake-name CustomTxProcessor . CustomTxProcessor

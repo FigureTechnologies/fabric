@@ -23,9 +23,9 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-lib-go/healthz"
+	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
-	"github.com/hyperledger/fabric/protos/orderer/etcdraft"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
@@ -51,11 +51,16 @@ var _ = Describe("EndToEnd", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		chaincode = nwo.Chaincode{
-			Name:    "mycc",
-			Version: "0.0",
-			Path:    "github.com/hyperledger/fabric/integration/chaincode/simple/cmd",
-			Ctor:    `{"Args":["init","a","100","b","200"]}`,
-			Policy:  `AND ('Org1MSP.member','Org2MSP.member')`,
+			Name:            "mycc",
+			Version:         "0.0",
+			Path:            components.Build("github.com/hyperledger/fabric/integration/chaincode/module"),
+			Lang:            "binary",
+			PackageFile:     filepath.Join(testDir, "modulecc.tar.gz"),
+			Ctor:            `{"Args":["init","a","100","b","200"]}`,
+			SignaturePolicy: `AND ('Org1MSP.member','Org2MSP.member')`,
+			Sequence:        "1",
+			InitRequired:    true,
+			Label:           "my_prebuilt_chaincode",
 		}
 	})
 
@@ -112,12 +117,13 @@ var _ = Describe("EndToEnd", func() {
 
 			By("setting up the channel")
 			network.CreateAndJoinChannel(orderer, "testchannel")
+			nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
 
 			By("deploying the chaincode")
 			nwo.DeployChaincode(network, "testchannel", orderer, chaincode)
 
 			By("getting the client peer by name")
-			peer := network.Peer("Org1", "peer1")
+			peer := network.Peer("Org1", "peer0")
 
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel")
 			RunRespondWith(network, orderer, peer, "testchannel")
@@ -149,12 +155,55 @@ var _ = Describe("EndToEnd", func() {
 			Eventually(process.Ready(), network.EventuallyTimeout).Should(BeClosed())
 		})
 
-		It("executes a basic kafka network with 2 orgs", func() {
+		It("executes a basic kafka network with 2 orgs (using docker chaincode builds)", func() {
+			chaincodePath, err := filepath.Abs("../chaincode/module")
+			Expect(err).NotTo(HaveOccurred())
+
+			// use these two variants of the same chaincode to ensure we test
+			// the golang docker build for both module and gopath chaincode
+			chaincode = nwo.Chaincode{
+				Name:            "mycc",
+				Version:         "0.0",
+				Path:            chaincodePath,
+				Lang:            "golang",
+				PackageFile:     filepath.Join(testDir, "modulecc.tar.gz"),
+				Ctor:            `{"Args":["init","a","100","b","200"]}`,
+				SignaturePolicy: `AND ('Org1MSP.member','Org2MSP.member')`,
+				Sequence:        "1",
+				InitRequired:    true,
+				Label:           "my_module_chaincode",
+			}
+
+			gopathChaincode := nwo.Chaincode{
+				Name:            "mycc",
+				Version:         "0.0",
+				Path:            "github.com/hyperledger/fabric/integration/chaincode/simple/cmd",
+				Lang:            "golang",
+				PackageFile:     filepath.Join(testDir, "simplecc.tar.gz"),
+				Ctor:            `{"Args":["init","a","100","b","200"]}`,
+				SignaturePolicy: `AND ('Org1MSP.member','Org2MSP.member')`,
+				Sequence:        "1",
+				InitRequired:    true,
+				Label:           "my_simple_chaincode",
+			}
+
 			orderer := network.Orderer("orderer")
 			peer := network.Peer("Org1", "peer1")
 
 			network.CreateAndJoinChannel(orderer, "testchannel")
-			nwo.DeployChaincode(network, "testchannel", orderer, chaincode)
+			nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
+
+			// package, install, and approve by org1 - module chaincode
+			packageInstallApproveChaincode(network, "testchannel", orderer, chaincode, network.Peer("Org1", "peer0"), network.Peer("Org1", "peer1"))
+
+			// package, install, and approve by org2 - gopath chaincode, same logic
+			packageInstallApproveChaincode(network, "testchannel", orderer, gopathChaincode, network.Peer("Org2", "peer0"), network.Peer("Org2", "peer1"))
+
+			testPeers := network.PeersWithChannel("testchannel")
+			nwo.CheckCommitReadinessUntilReady(network, "testchannel", chaincode, network.PeerOrgs(), testPeers...)
+			nwo.CommitChaincode(network, "testchannel", orderer, chaincode, testPeers[0], testPeers...)
+			nwo.InitChaincode(network, "testchannel", orderer, chaincode, testPeers...)
+
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel")
 
 			CheckPeerOperationEndpoints(network, network.Peer("Org2", "peer1"))
@@ -179,12 +228,18 @@ var _ = Describe("EndToEnd", func() {
 
 			By("Create first channel and deploy the chaincode")
 			network.CreateAndJoinChannel(orderer, "testchannel1")
+			nwo.EnableCapabilities(network, "testchannel1", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
 			nwo.DeployChaincode(network, "testchannel1", orderer, chaincode)
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel1")
 
 			By("Create second channel and deploy chaincode")
 			network.CreateAndJoinChannel(orderer, "testchannel2")
-			nwo.InstantiateChaincode(network, "testchannel2", orderer, chaincode, peer, network.PeersWithChannel("testchannel2")...)
+			peers := network.PeersWithChannel("testchannel2")
+			nwo.EnableCapabilities(network, "testchannel2", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
+			nwo.ApproveChaincodeForMyOrg(network, "testchannel2", orderer, chaincode, peers...)
+			nwo.CheckCommitReadinessUntilReady(network, "testchannel2", chaincode, network.PeerOrgs(), peers...)
+			nwo.CommitChaincode(network, "testchannel2", orderer, chaincode, peers[0], peers...)
+			nwo.InitChaincode(network, "testchannel2", orderer, chaincode, peers...)
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel2")
 
 			By("Update consensus metadata to increase snapshot interval")
@@ -295,6 +350,9 @@ func CheckPeerStatsdMetrics(contents, prefix string) {
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_requests_received.protos_Endorser.ProcessProposal:"))
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_requests_completed.protos_Endorser.ProcessProposal.OK:"))
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_request_duration.protos_Endorser.ProcessProposal.OK:"))
+	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockchain_height"))
+	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_commit_time"))
+	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_and_pvtdata_commit_time"))
 }
 
 func CheckPeerStatsdStreamMetrics(contents string) {
@@ -319,6 +377,8 @@ func CheckOrdererStatsdMetrics(contents, prefix string) {
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_requests_completed.orderer_AtomicBroadcast.Deliver."))
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_messages_received.orderer_AtomicBroadcast.Deliver"))
 	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_messages_sent.orderer_AtomicBroadcast.Deliver"))
+	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockchain_height"))
+	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_commit_time"))
 }
 
 func OrdererOperationalClients(network *nwo.Network, orderer *nwo.Orderer) (authClient, unauthClient *http.Client) {
@@ -416,6 +476,9 @@ func CheckPeerPrometheusMetrics(client *http.Client, url string) {
 	Expect(body).To(ContainSubstring(`grpc_server_stream_messages_sent{method="DeliverFiltered",service="protos_Deliver"}`))
 	Expect(body).To(ContainSubstring(`# TYPE grpc_comm_conn_closed counter`))
 	Expect(body).To(ContainSubstring(`# TYPE grpc_comm_conn_opened counter`))
+	Expect(body).To(ContainSubstring(`ledger_blockchain_height`))
+	Expect(body).To(ContainSubstring(`ledger_blockstorage_commit_time_bucket`))
+	Expect(body).To(ContainSubstring(`ledger_blockstorage_and_pvtdata_commit_time_bucket`))
 }
 
 func CheckOrdererPrometheusMetrics(client *http.Client, url string) {
@@ -435,6 +498,8 @@ func CheckOrdererPrometheusMetrics(client *http.Client, url string) {
 	Expect(body).To(ContainSubstring(`grpc_server_stream_request_duration_sum{code="OK",method="Broadcast",service="orderer_AtomicBroadcast"`))
 	Expect(body).To(ContainSubstring(`# TYPE grpc_comm_conn_closed counter`))
 	Expect(body).To(ContainSubstring(`# TYPE grpc_comm_conn_opened counter`))
+	Expect(body).To(ContainSubstring(`ledger_blockchain_height`))
+	Expect(body).To(ContainSubstring(`ledger_blockstorage_commit_time_bucket`))
 }
 
 func CheckLogspecOperations(client *http.Client, logspecURL string) {
@@ -483,4 +548,10 @@ func getBody(client *http.Client, url string) func() string {
 		resp.Body.Close()
 		return string(bodyBytes)
 	}
+}
+
+func packageInstallApproveChaincode(network *nwo.Network, channel string, orderer *nwo.Orderer, chaincode nwo.Chaincode, peers ...*nwo.Peer) {
+	nwo.PackageChaincode(network, chaincode, peers[0])
+	nwo.InstallChaincode(network, chaincode, peers...)
+	nwo.ApproveChaincodeForMyOrg(network, channel, orderer, chaincode, peers...)
 }

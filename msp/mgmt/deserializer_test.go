@@ -11,19 +11,26 @@ import (
 	"os"
 	"testing"
 
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/msp"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewDeserializersManager(t *testing.T) {
-	assert.NotNil(t, NewDeserializersManager())
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+	assert.NotNil(t, NewDeserializersManager(cryptoProvider))
 }
 
 func TestMspDeserializersManager_Deserialize(t *testing.T) {
-	m := NewDeserializersManager()
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
 
-	i, err := GetLocalMSP().GetDefaultSigningIdentity()
+	m := NewDeserializersManager(cryptoProvider)
+
+	i, err := GetLocalMSP(cryptoProvider).GetDefaultSigningIdentity()
 	assert.NoError(t, err)
 	raw, err := i.Serialize()
 	assert.NoError(t, err)
@@ -36,16 +43,22 @@ func TestMspDeserializersManager_Deserialize(t *testing.T) {
 }
 
 func TestMspDeserializersManager_GetChannelDeserializers(t *testing.T) {
-	m := NewDeserializersManager()
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
+	m := NewDeserializersManager(cryptoProvider)
 
 	deserializers := m.GetChannelDeserializers()
 	assert.NotNil(t, deserializers)
 }
 
 func TestMspDeserializersManager_GetLocalDeserializer(t *testing.T) {
-	m := NewDeserializersManager()
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
 
-	i, err := GetLocalMSP().GetDefaultSigningIdentity()
+	m := NewDeserializersManager(cryptoProvider)
+
+	i, err := GetLocalMSP(cryptoProvider).GetDefaultSigningIdentity()
 	assert.NoError(t, err)
 	raw, err := i.Serialize()
 	assert.NoError(t, err)
@@ -70,7 +83,9 @@ func TestMain(m *testing.M) {
 		os.Exit(-1)
 	}
 
-	err = GetLocalMSP().Setup(testConf)
+	cryptoProvider := factory.GetDefault()
+
+	err = GetLocalMSP(cryptoProvider).Setup(testConf)
 	if err != nil {
 		fmt.Printf("Setup for msp should have succeeded, got err %s instead", err)
 		os.Exit(-1)

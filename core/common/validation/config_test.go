@@ -9,18 +9,19 @@ package validation
 import (
 	"testing"
 
-	"github.com/hyperledger/fabric/common/mocks/config"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/internal/configtxgen/configtxgentest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	genesisconfig "github.com/hyperledger/fabric/internal/configtxgen/localconfig"
-	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestValidateConfigTx(t *testing.T) {
-	chainID := util.GetTestChainID()
+	channelID := util.GetTestChannelID()
 	profile := configtxgentest.Load(genesisconfig.SampleSingleMSPChannelProfile)
 	chCrtEnv, err := encoder.MakeChannelCreationTransaction(genesisconfig.SampleConsortiumName, nil, profile)
 	if err != nil {
@@ -32,7 +33,7 @@ func TestValidateConfigTx(t *testing.T) {
 		Payload: protoutil.MarshalOrPanic(&cb.Payload{Header: &cb.Header{
 			ChannelHeader: protoutil.MarshalOrPanic(&cb.ChannelHeader{
 				Type:      int32(cb.HeaderType_CONFIG),
-				ChannelId: chainID,
+				ChannelId: channelID,
 			}),
 			SignatureHeader: protoutil.MarshalOrPanic(&cb.SignatureHeader{
 				Creator: signerSerialized,
@@ -44,8 +45,10 @@ func TestValidateConfigTx(t *testing.T) {
 			}),
 		}),
 	}
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
 	updateResult.Signature, _ = signer.Sign(updateResult.Payload)
-	_, txResult := ValidateTransaction(updateResult, &config.MockApplicationCapabilities{})
+	_, txResult := ValidateTransaction(updateResult, cryptoProvider)
 	if txResult != peer.TxValidationCode_VALID {
 		t.Fatalf("ValidateTransaction failed, err %s", err)
 		return

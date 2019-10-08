@@ -9,16 +9,19 @@ package chaincode
 import (
 	"sync"
 
-	persistence "github.com/hyperledger/fabric/core/chaincode/persistence/intf"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/gossip"
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/gossip"
 )
 
 // InstalledChaincode defines metadata about an installed chaincode
 type InstalledChaincode struct {
-	PackageID persistence.PackageID
+	PackageID string
 	Hash      []byte
 	Label     string
+	// References is a map of channel name to chaincode
+	// metadata. This represents the channels and chaincode
+	// definitions that use this installed chaincode package.
+	References map[string][]*Metadata
 
 	// FIXME: we should remove these two
 	// fields since they are not properties

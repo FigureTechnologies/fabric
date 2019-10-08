@@ -23,7 +23,6 @@ var logger = flogging.MustGetLogger("chaincode.platform.util")
 
 type DockerBuildOptions struct {
 	Image        string
-	Env          []string
 	Cmd          string
 	InputStream  io.Reader
 	OutputStream io.Writer
@@ -47,7 +46,6 @@ type DockerBuildOptions struct {
 //
 // The input parameters are fairly simple:
 //      - Image:        (optional) The builder image to use or "chaincode.builder"
-//      - Env:          (optional) environment variables for the build environment.
 //      - Cmd:          The command to execute inside the container.
 //      - InputStream:  A tarball of files that will be expanded into /chaincode/input.
 //      - OutputStream: A tarball of files that will be gathered from /chaincode/output
@@ -55,7 +53,7 @@ type DockerBuildOptions struct {
 //-------------------------------------------------------------------------------------------
 func DockerBuild(opts DockerBuildOptions, client *docker.Client) error {
 	if opts.Image == "" {
-		opts.Image = GetDockerfileFromConfig("chaincode.builder")
+		opts.Image = GetDockerImageFromConfig("chaincode.builder")
 		if opts.Image == "" {
 			return fmt.Errorf("No image provided and \"chaincode.builder\" default does not exist")
 		}
@@ -77,12 +75,11 @@ func DockerBuild(opts DockerBuildOptions, client *docker.Client) error {
 	}
 
 	//-----------------------------------------------------------------------------------
-	// Create an ephemeral container, armed with our Env/Cmd
+	// Create an ephemeral container, armed with our Image/Cmd
 	//-----------------------------------------------------------------------------------
 	container, err := client.CreateContainer(docker.CreateContainerOptions{
 		Config: &docker.Config{
 			Image:        opts.Image,
-			Env:          opts.Env,
 			Cmd:          []string{"/bin/sh", "-c", opts.Cmd},
 			AttachStdout: true,
 			AttachStderr: true,
@@ -165,7 +162,7 @@ func DockerBuild(opts DockerBuildOptions, client *docker.Client) error {
 	return nil
 }
 
-func GetDockerfileFromConfig(path string) string {
+func GetDockerImageFromConfig(path string) string {
 	r := strings.NewReplacer(
 		"$(ARCH)", runtime.GOARCH,
 		"$(PROJECT_VERSION)", metadata.Version,

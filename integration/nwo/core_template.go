@@ -17,7 +17,6 @@ peer:
   addressAutoDetect: true
   listenAddress: 127.0.0.1:{{ .PeerPort Peer "Listen" }}
   chaincodeListenAddress: 0.0.0.0:{{ .PeerPort Peer "Chaincode" }}
-  gomaxprocs: -1
   keepalive:
     minInterval: 60s
     client:
@@ -102,7 +101,6 @@ peer:
   profile:
     enabled:     false
     listenAddress: 127.0.0.1:{{ .PeerPort Peer "ProfilePort" }}
-  adminService:
   handlers:
     authFilters:
     - name: DefaultAuth
@@ -168,11 +166,17 @@ chaincode:
     cscc:       enable
     lscc:       enable
     qscc:       enable
-  systemPlugins:
   logging:
     level:  info
     shim:   warning
     format: '%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}'
+  externalBuilders: {{ range .ExternalBuilders }}
+    - path: {{ .Path }}
+      name: {{ .Name }}
+      environmentWhitelist: {{ range .EnvironmentWhitelist }}
+         - {{ . }}
+      {{- end }}
+  {{- end }}
 
 ledger:
   blockchain:

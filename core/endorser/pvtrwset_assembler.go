@@ -12,10 +12,10 @@ package endorser
 import (
 	"fmt"
 
+	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go/transientstore"
 	"github.com/hyperledger/fabric/core/ledger"
-	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/hyperledger/fabric/protos/transientstore"
 	"github.com/pkg/errors"
 )
 
@@ -41,14 +41,11 @@ type CollectionConfigRetriever interface {
 	GetState(namespace string, key string) ([]byte, error)
 }
 
-type rwSetAssembler struct {
-}
-
 // AssemblePvtRWSet prepares TxPvtReadWriteSet for distribution
 // augmenting it into TxPvtReadWriteSetWithConfigInfo adding
 // information about collections config available related
 // to private read-write set
-func (as *rwSetAssembler) AssemblePvtRWSet(channelName string,
+func AssemblePvtRWSet(channelName string,
 	privData *rwset.TxPvtReadWriteSet,
 	txsim ledger.SimpleQueryExecutor,
 	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider) (
@@ -73,11 +70,11 @@ func (as *rwSetAssembler) AssemblePvtRWSet(channelName string,
 			txPvtRwSetWithConfig.CollectionConfigs[namespace] = colCP
 		}
 	}
-	as.trimCollectionConfigs(txPvtRwSetWithConfig)
+	trimCollectionConfigs(txPvtRwSetWithConfig)
 	return txPvtRwSetWithConfig, nil
 }
 
-func (as *rwSetAssembler) trimCollectionConfigs(pvtData *transientstore.TxPvtReadWriteSetWithConfigInfo) {
+func trimCollectionConfigs(pvtData *transientstore.TxPvtReadWriteSetWithConfigInfo) {
 	flags := make(map[string]map[string]struct{})
 	for _, pvtRWset := range pvtData.PvtRwset.NsPvtRwset {
 		namespace := pvtRWset.Namespace

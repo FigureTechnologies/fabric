@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	config "github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/stretchr/testify/assert"
@@ -51,15 +52,15 @@ func TestCreateLedgerFactory(t *testing.T) {
 			conf.General.LedgerType = tc.ledgerType
 			conf.FileLedger.Location = tc.ledgerDir
 			conf.FileLedger.Prefix = tc.ledgerDirPrefix
-			lf, ld := createLedgerFactory(conf)
-
+			lf, ld, err := createLedgerFactory(conf, &disabled.Provider{})
+			assert.NoError(t, err)
 			defer func() {
 				if ld != "" {
 					os.RemoveAll(ld)
 					t.Log("Removed temp dir:", ld)
 				}
 			}()
-			lf.ChainIDs()
+			lf.ChannelIDs()
 		})
 	}
 }

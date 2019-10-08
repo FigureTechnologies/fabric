@@ -8,6 +8,8 @@ package encoder
 
 import (
 	"github.com/gogo/protobuf/proto"
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/common/cauthdsl"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/flogging"
@@ -18,8 +20,6 @@ import (
 	"github.com/hyperledger/fabric/internal/configtxlator/update"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/msp"
-	cb "github.com/hyperledger/fabric/protos/common"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -604,9 +604,9 @@ func New(config *genesisconfig.Profile) *Bootstrapper {
 	return bs
 }
 
-// GenesisBlock produces a genesis block for the default test chain id
+// GenesisBlock produces a genesis block for the default test channel id
 func (bs *Bootstrapper) GenesisBlock() *cb.Block {
-	return genesis.NewFactoryImpl(bs.channelGroup).Block(genesisconfig.TestChainID)
+	return genesis.NewFactoryImpl(bs.channelGroup).Block(genesisconfig.TestChannelID)
 }
 
 // GenesisBlockForChannel produces a genesis block for a given channel ID
