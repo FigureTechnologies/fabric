@@ -20,6 +20,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/cauthdsl"
 	ccdef "github.com/hyperledger/fabric/common/chaincode"
+	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/deliver"
 	"github.com/hyperledger/fabric/common/flogging"
@@ -220,7 +221,7 @@ func serve(args []string) error {
 
 	throttle := comm.NewThrottle(grpcMaxConcurrency)
 	serverConfig.Logger = flogging.MustGetLogger("core.comm").With("server", "PeerServer")
-	serverConfig.MetricsProvider = metricsProvider
+	serverConfig.ServerStatsHandler = comm.NewServerStatsHandler(metricsProvider)
 	serverConfig.UnaryInterceptors = append(
 		serverConfig.UnaryInterceptors,
 		grpcmetrics.UnaryServerInterceptor(grpcmetrics.NewUnaryMetrics(metricsProvider)),
@@ -273,7 +274,7 @@ func serve(args []string) error {
 	logger.Debugf("Running peer")
 
 	// Start the Admin server
-	startAdminServer(listenAddr, peerServer.Server(), metricsProvider)
+	startAdminServer(listenAddr, peerServer.Server(), serverConfig)
 
 	privDataDist := func(channel string, txID string, privateData *transientstore.TxPvtReadWriteSetWithConfigInfo, blkHt uint64) error {
 		return service.GetGossipService().DistributePrivateData(channel, txID, privateData, blkHt)
@@ -313,6 +314,16 @@ func serve(args []string) error {
 	})
 	endorserSupport.PluginEndorser = pluginEndorser
 	serverEndorser := endorser.NewEndorserServer(privDataDist, endorserSupport, pr, metricsProvider)
+
+	expirationLogger := flogging.MustGetLogger("certmonitor")
+	crypto.TrackExpiration(
+		serverConfig.SecOpts.UseTLS,
+		serverConfig.SecOpts.Certificate,
+		comm.GetCredentialSupport().GetClientCertificate().Certificate,
+		serializedIdentity,
+		expirationLogger.Warnf, // This can be used to piggyback a metric event in the future
+		time.Now(),
+		time.AfterFunc)
 
 	policyMgr := peer.NewChannelPolicyManagerGetter()
 
@@ -798,7 +809,7 @@ func adminHasSeparateListener(peerListenAddr string, adminListenAddress string) 
 	return adminPort != peerPort
 }
 
-func startAdminServer(peerListenAddr string, peerServer *grpc.Server, metricsProvider metrics.Provider) {
+func startAdminServer(peerListenAddr string, peerServer *grpc.Server, baseServerConfig comm.ServerConfig) {
 	adminListenAddress := viper.GetString("peer.adminService.listenAddress")
 	separateLsnrForAdmin := adminHasSeparateListener(peerListenAddr, adminListenAddress)
 	mspID := viper.GetString("peer.localMspId")
@@ -810,21 +821,11 @@ func startAdminServer(peerListenAddr string, peerServer *grpc.Server, metricsPro
 		if err != nil {
 			logger.Fatalf("Error loading secure config for admin service (%s)", err)
 		}
-		throttle := comm.NewThrottle(grpcMaxConcurrency)
 		serverConfig.Logger = flogging.MustGetLogger("core.comm").With("server", "AdminServer")
-		serverConfig.MetricsProvider = metricsProvider
-		serverConfig.UnaryInterceptors = append(
-			serverConfig.UnaryInterceptors,
-			grpcmetrics.UnaryServerInterceptor(grpcmetrics.NewUnaryMetrics(metricsProvider)),
-			grpclogging.UnaryServerInterceptor(flogging.MustGetLogger("comm.grpc.server").Zap()),
-			throttle.UnaryServerIntercptor,
-		)
-		serverConfig.StreamInterceptors = append(
-			serverConfig.StreamInterceptors,
-			grpcmetrics.StreamServerInterceptor(grpcmetrics.NewStreamMetrics(metricsProvider)),
-			grpclogging.StreamServerInterceptor(flogging.MustGetLogger("comm.grpc.server").Zap()),
-			throttle.StreamServerInterceptor,
-		)
+		serverConfig.ServerStatsHandler = baseServerConfig.ServerStatsHandler
+		serverConfig.UnaryInterceptors = baseServerConfig.UnaryInterceptors
+		serverConfig.StreamInterceptors = baseServerConfig.StreamInterceptors
+
 		adminServer, err := peer.NewPeerServer(adminListenAddress, serverConfig)
 		if err != nil {
 			logger.Fatalf("Failed to create admin server (%s)", err)

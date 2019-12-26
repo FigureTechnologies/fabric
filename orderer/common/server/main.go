@@ -159,6 +159,21 @@ func Start(cmd string, conf *localconfig.TopLevel) {
 		}
 	}
 
+	sigHdr, err := signer.NewSignatureHeader()
+	if err != nil {
+		logger.Panicf("Failed creating a signature header: %v", err)
+	}
+
+	expirationLogger := flogging.MustGetLogger("certmonitor")
+	crypto.TrackExpiration(
+		serverConfig.SecOpts.UseTLS,
+		serverConfig.SecOpts.Certificate,
+		[][]byte{clusterClientConfig.SecOpts.Certificate},
+		sigHdr.Creator,
+		expirationLogger.Warnf, // This can be used to piggyback a metric event in the future
+		time.Now(),
+		time.AfterFunc)
+
 	manager := initializeMultichannelRegistrar(clusterBootBlock, r, clusterDialer, clusterServerConfig, clusterGRPCServer, conf, signer, metricsProvider, opsSystem, lf, tlsCallback)
 	mutualTLS := serverConfig.SecOpts.UseTLS && serverConfig.SecOpts.RequireClientCert
 	expiration := conf.General.Authentication.NoExpirationChecks
@@ -361,7 +376,7 @@ func configureClusterListener(conf *localconfig.TopLevel, generalConf comm.Serve
 		StreamInterceptors: generalConf.StreamInterceptors,
 		UnaryInterceptors:  generalConf.UnaryInterceptors,
 		ConnectionTimeout:  generalConf.ConnectionTimeout,
-		MetricsProvider:    generalConf.MetricsProvider,
+		ServerStatsHandler: generalConf.ServerStatsHandler,
 		Logger:             generalConf.Logger,
 		KaOpts:             generalConf.KaOpts,
 		SecOpts: &comm.SecureOptions{
@@ -488,16 +503,17 @@ func initializeServerConfig(conf *localconfig.TopLevel, metricsProvider metrics.
 	kaOpts.ServerTimeout = conf.General.Keepalive.ServerTimeout
 
 	commLogger := flogging.MustGetLogger("core.comm").With("server", "Orderer")
+
 	if metricsProvider == nil {
 		metricsProvider = &disabled.Provider{}
 	}
 
 	return comm.ServerConfig{
-		SecOpts:           secureOpts,
-		KaOpts:            kaOpts,
-		Logger:            commLogger,
-		MetricsProvider:   metricsProvider,
-		ConnectionTimeout: conf.General.ConnectionTimeout,
+		SecOpts:            secureOpts,
+		KaOpts:             kaOpts,
+		Logger:             commLogger,
+		ServerStatsHandler: comm.NewServerStatsHandler(metricsProvider),
+		ConnectionTimeout:  conf.General.ConnectionTimeout,
 		StreamInterceptors: []grpc.StreamServerInterceptor{
 			grpcmetrics.StreamServerInterceptor(grpcmetrics.NewStreamMetrics(metricsProvider)),
 			grpclogging.StreamServerInterceptor(flogging.MustGetLogger("comm.grpc.server").Zap()),

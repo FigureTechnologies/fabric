@@ -75,6 +75,9 @@ is the recommended release for production operations.
   * The ``/metrics`` endpoint allows operators to utilize Prometheus to pull operational
     metrics from peer and orderer nodes. Metrics can also be pushed to StatsD.
 
+  * As of v1.4.4, the ``/version`` endpoint allows operators to query the release version
+    of the peer and orderer and the commit SHA from which the release was cut.
+
 Improved programming model for developing applications
 ------------------------------------------------------
 
@@ -174,10 +177,12 @@ with a link to the full release change log.
 * `Fabric v1.4.1 release notes <https://github.com/hyperledger/fabric/releases/tag/v1.4.1>`_.
 * `Fabric v1.4.2 release notes <https://github.com/hyperledger/fabric/releases/tag/v1.4.2>`_.
 * `Fabric v1.4.3 release notes <https://github.com/hyperledger/fabric/releases/tag/v1.4.3>`_.
+* `Fabric v1.4.4 release notes <https://github.com/hyperledger/fabric/releases/tag/v1.4.4>`_.
 * `Fabric CA v1.4.0 release notes <https://github.com/hyperledger/fabric-ca/releases/tag/v1.4.0>`_.
 * `Fabric CA v1.4.1 release notes <https://github.com/hyperledger/fabric-ca/releases/tag/v1.4.1>`_.
 * `Fabric CA v1.4.2 release notes <https://github.com/hyperledger/fabric-ca/releases/tag/v1.4.2>`_.
 * `Fabric CA v1.4.3 release notes <https://github.com/hyperledger/fabric-ca/releases/tag/v1.4.3>`_.
+* `Fabric CA v1.4.4 release notes <https://github.com/hyperledger/fabric-ca/releases/tag/v1.4.4>`_.
 
 .. Licensed under Creative Commons Attribution 4.0 International License
    https://creativecommons.org/licenses/by/4.0/

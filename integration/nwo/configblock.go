@@ -7,18 +7,18 @@ SPDX-License-Identifier: Apache-2.0
 package nwo
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"bytes"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/tools/configtxlator/update"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protos/msp"
 	protosorderer "github.com/hyperledger/fabric/protos/orderer"
 	ectdraft_protos "github.com/hyperledger/fabric/protos/orderer/etcdraft"
 	"github.com/hyperledger/fabric/protos/utils"
@@ -72,7 +72,7 @@ func GetConfig(n *Network, peer *Peer, orderer *Orderer, channel string) *common
 
 // UpdateConfig computes, signs, and submits a configuration update and waits
 // for the update to complete.
-func UpdateConfig(n *Network, orderer *Orderer, channel string, current, updated *common.Config, submitter *Peer, additionalSigners ...*Peer) {
+func UpdateConfig(n *Network, orderer *Orderer, channel string, current, updated *common.Config, getConfigBlockFromOrderer bool, submitter *Peer, additionalSigners ...*Peer) {
 	tempDir, err := ioutil.TempDir("", "updateConfig")
 	Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(tempDir)
@@ -103,8 +103,13 @@ func UpdateConfig(n *Network, orderer *Orderer, channel string, current, updated
 		Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	}
 
+	var currentBlockNumber uint64
 	// get current configuration block number
-	currentBlockNumber := CurrentConfigBlockNumber(n, submitter, orderer, channel)
+	if getConfigBlockFromOrderer {
+		currentBlockNumber = CurrentConfigBlockNumber(n, submitter, orderer, channel)
+	} else {
+		currentBlockNumber = CurrentConfigBlockNumber(n, submitter, nil, channel)
+	}
 
 	sess, err := n.PeerAdminSession(submitter, commands.ChannelUpdate{
 		ChannelID: channel,
@@ -115,10 +120,16 @@ func UpdateConfig(n *Network, orderer *Orderer, channel string, current, updated
 	Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	Expect(sess.Err).To(gbytes.Say("Successfully submitted channel update"))
 
+	if getConfigBlockFromOrderer {
+		ccb := func() uint64 { return CurrentConfigBlockNumber(n, submitter, orderer, channel) }
+		Eventually(ccb, n.EventuallyTimeout).Should(BeNumerically(">", currentBlockNumber))
+		return
+	}
+
 	// wait for the block to be committed to all peers that
 	// have joined the channel
 	for _, peer := range n.PeersWithChannel(channel) {
-		ccb := func() uint64 { return CurrentConfigBlockNumber(n, peer, orderer, channel) }
+		ccb := func() uint64 { return CurrentConfigBlockNumber(n, peer, nil, channel) }
 		Eventually(ccb, n.EventuallyTimeout).Should(BeNumerically(">", currentBlockNumber))
 	}
 }
@@ -302,6 +313,9 @@ func RemoveConsenter(n *Network, peer *Peer, orderer *Orderer, channel string, c
 // ConsensusMetadataMutator receives ConsensusType.Metadata and mutates it
 type ConsensusMetadataMutator func([]byte) []byte
 
+// MSPMutator receives FabricMSPConfig and mutates it.
+type MSPMutator func(config msp.FabricMSPConfig) msp.FabricMSPConfig
+
 // UpdateConsensusMetadata executes a config update that updates the consensus metadata according to the given ConsensusMetadataMutator
 func UpdateConsensusMetadata(network *Network, peer *Peer, orderer *Orderer, channel string, mutateMetadata ConsensusMetadataMutator) {
 	config := GetConfig(network, peer, orderer, channel)
@@ -335,4 +349,28 @@ func UpdateEtcdRaftMetadata(network *Network, peer *Peer, orderer *Orderer, chan
 		Expect(err).NotTo(HaveOccurred())
 		return newMetadata
 	})
+}
+
+func UpdateOrdererMSP(network *Network, peer *Peer, orderer *Orderer, channel, orgID string, mutateMSP MSPMutator) {
+	config := GetConfig(network, peer, orderer, channel)
+	updatedConfig := proto.Clone(config).(*common.Config)
+
+	// Unpack the MSP config
+	rawMSPConfig := updatedConfig.ChannelGroup.Groups["Orderer"].Groups[orgID].Values["MSP"]
+	mspConfig := &msp.MSPConfig{}
+	err := proto.Unmarshal(rawMSPConfig.Value, mspConfig)
+	Expect(err).NotTo(HaveOccurred())
+
+	fabricConfig := &msp.FabricMSPConfig{}
+	err = proto.Unmarshal(mspConfig.Config, fabricConfig)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Mutate it as we are asked
+	*fabricConfig = mutateMSP(*fabricConfig)
+
+	// Wrap it back into the config
+	mspConfig.Config = utils.MarshalOrPanic(fabricConfig)
+	rawMSPConfig.Value = utils.MarshalOrPanic(mspConfig)
+
+	UpdateOrdererConfig(network, orderer, channel, config, updatedConfig, peer, orderer)
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -279,6 +280,28 @@ func (n *Network) WriteOrdererConfig(o *Orderer, config *fabricconfig.Orderer) {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = ioutil.WriteFile(n.OrdererConfigPath(o), ordererBytes, 0644)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+// ReadConfigTxConfig  unmarshals the configtx.yaml and returns an
+// object approximating its contents.
+func (n *Network) ReadConfigTxConfig() *fabricconfig.ConfigTx {
+	var configtx fabricconfig.ConfigTx
+	configtxBytes, err := ioutil.ReadFile(n.ConfigTxConfigPath())
+	Expect(err).NotTo(HaveOccurred())
+
+	err = yaml.Unmarshal(configtxBytes, &configtx)
+	Expect(err).NotTo(HaveOccurred())
+
+	return &configtx
+}
+
+// WriteConfigTxConfig serializes the provided configuration to configtx.yaml.
+func (n *Network) WriteConfigTxConfig(config *fabricconfig.ConfigTx) {
+	configtxBytes, err := yaml.Marshal(config)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = ioutil.WriteFile(n.ConfigTxConfigPath(), configtxBytes, 0644)
 	Expect(err).NotTo(HaveOccurred())
 }
 
@@ -621,12 +644,12 @@ func (n *Network) Bootstrap() {
 		Eventually(sess, n.EventuallyTimeout).Should(gexec.Exit(0))
 	}
 
-	n.concatenateTLSCACertificates()
+	n.ConcatenateTLSCACertificates()
 }
 
 // concatenateTLSCACertificates concatenates all TLS CA certificates into a
 // single file to be used by peer CLI.
-func (n *Network) concatenateTLSCACertificates() {
+func (n *Network) ConcatenateTLSCACertificates() {
 	bundle := &bytes.Buffer{}
 	for _, tlsCertPath := range n.listTLSCACertificates() {
 		certBytes, err := ioutil.ReadFile(tlsCertPath)
@@ -1178,6 +1201,17 @@ func (n *Network) PeersWithChannel(chanName string) []*Peer {
 			}
 		}
 	}
+
+	// This is a bit of a hack to make the output of this function deterministic.
+	// When this function's output is supplied as input to functions such as ApproveChaincodeForMyOrg
+	// it causes a different subset of peers to be picked, which can create flakiness in tests.
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].Organization < peers[j].Organization {
+			return true
+		}
+
+		return peers[i].Organization == peers[j].Organization && peers[i].Name < peers[j].Name
+	})
 	return peers
 }
 
@@ -1277,23 +1311,25 @@ type PortName string
 type Ports map[PortName]uint16
 
 const (
-	ChaincodePort  PortName = "Chaincode"
-	EventsPort     PortName = "Events"
-	HostPort       PortName = "HostPort"
-	ListenPort     PortName = "Listen"
-	ProfilePort    PortName = "Profile"
-	OperationsPort PortName = "Operations"
+	ChaincodePort    PortName = "Chaincode"
+	EventsPort       PortName = "Events"
+	HostPort         PortName = "HostPort"
+	ListenPort       PortName = "Listen"
+	ProfilePort      PortName = "Profile"
+	OperationsPort   PortName = "Operations"
+	AdminServicePort PortName = "AdminService"
+	ClusterPort      PortName = "Cluster"
 )
 
 // PeerPortNames returns the list of ports that need to be reserved for a Peer.
 func PeerPortNames() []PortName {
-	return []PortName{ListenPort, ChaincodePort, EventsPort, ProfilePort, OperationsPort}
+	return []PortName{ListenPort, ChaincodePort, EventsPort, ProfilePort, OperationsPort, AdminServicePort}
 }
 
 // OrdererPortNames  returns the list of ports that need to be reserved for an
 // Orderer.
 func OrdererPortNames() []PortName {
-	return []PortName{ListenPort, ProfilePort, OperationsPort}
+	return []PortName{ListenPort, ProfilePort, OperationsPort, ClusterPort}
 }
 
 // BrokerPortNames returns the list of ports that need to be reserved for a

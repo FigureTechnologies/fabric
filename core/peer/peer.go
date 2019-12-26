@@ -49,7 +49,7 @@ import (
 
 var peerLogger = flogging.MustGetLogger("peer")
 
-var peerServer *comm.GRPCServer
+var peerServers []*comm.GRPCServer
 
 var configTxProcessor = newConfigTxProcessor()
 var tokenTxProcessor = &transaction.Processor{
@@ -325,7 +325,15 @@ func getCurrConfigBlockFromLedger(ledger ledger.PeerLedger) (*common.Block, erro
 }
 
 // createChain creates a new chain object and insert it into the chains
-func createChain(cid string, ledger ledger.PeerLedger, cb *common.Block, ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodeProvider, pm txvalidator.PluginMapper) error {
+func createChain(
+	cid string,
+	ledger ledger.PeerLedger,
+	cb *common.Block,
+	ccp ccprovider.ChaincodeProvider,
+	sccp sysccprovider.SystemChaincodeProvider,
+	pm txvalidator.PluginMapper,
+) error {
+
 	chanConf, err := retrievePersistedChannelConfig(ledger)
 	if err != nil {
 		return err
@@ -458,6 +466,11 @@ func createChain(cid string, ledger ledger.PeerLedger, cb *common.Block, ccp ccp
 		return errors.New("no ordering service endpoint provided in configuration block")
 	}
 
+	ordererAddressOverrides, err := GetOrdererAddressOverrides()
+	if err != nil {
+		return errors.Errorf("failed to get override addresses: %s", err)
+	}
+
 	// TODO: does someone need to call Close() on the transientStoreFactory at shutdown of the peer?
 	store, err := TransientStoreFactory.OpenStore(bundle.ConfigtxValidator().ChainID())
 	if err != nil {
@@ -470,9 +483,10 @@ func createChain(cid string, ledger ledger.PeerLedger, cb *common.Block, ccp ccp
 	simpleCollectionStore := privdata.NewSimpleCollectionStore(csStoreSupport)
 
 	oac := service.OrdererAddressConfig{
-		Addresses:      ordererAddresses,
-		AddressesByOrg: ordererAddressesByOrg,
-		Organizations:  ordererOrganizations,
+		Addresses:        ordererAddresses,
+		AddressesByOrg:   ordererAddressesByOrg,
+		Organizations:    ordererOrganizations,
+		AddressOverrides: ordererAddressOverrides,
 	}
 	service.GetGossipService().InitializeChannel(bundle.ConfigtxValidator().ChainID(), oac, service.Support{
 		Validator:            validator,
@@ -590,9 +604,8 @@ func updateTrustedRoots(cm channelconfig.Resources) {
 			trustedRoots = append(trustedRoots, serverConfig.SecOpts.ServerRootCAs...)
 		}
 
-		server := peerServer
-		// now update the client roots for the peerServer
-		if server != nil {
+		for _, server := range peerServers {
+			// now update the client roots for the peerServers
 			err := server.SetClientRootCAs(trustedRoots)
 			if err != nil {
 				msg := "Failed to update trusted roots for peer from latest config " +
@@ -765,12 +778,12 @@ func (c *channelPolicyManagerGetter) Manager(channelID string) (policies.Manager
 // NewPeerServer creates an instance of comm.GRPCServer
 // This server is used for peer communications
 func NewPeerServer(listenAddress string, serverConfig comm.ServerConfig) (*comm.GRPCServer, error) {
-	var err error
-	peerServer, err = comm.NewGRPCServer(listenAddress, serverConfig)
+	peerServer, err := comm.NewGRPCServer(listenAddress, serverConfig)
 	if err != nil {
 		peerLogger.Errorf("Failed to create peer server (%s)", err)
 		return nil, err
 	}
+	peerServers = append(peerServers, peerServer)
 	return peerServer, nil
 }
 
