@@ -185,11 +185,7 @@ func (api *KubernetesAPI) Start(ccid ccintf.CCID,
 func (api *KubernetesAPI) Stop(ccid ccintf.CCID, timeout uint, dontkill bool, dontremove bool) error {
 	kubernetesLogger.Infof("Stop chaincode %s requested. [kill=%t, remove=%t]", ccid.Name, !dontkill, !dontremove)
 	// Remove any existing deployments by matching labels
-	if !dontremove && !dontremove {
-		return api.stopAllInternal(ccid)
-	}
-
-	return nil
+	return api.stopAllInternal(ccid)
 }
 
 // Wait blocks until the container stops and returns the exit code of the container.
