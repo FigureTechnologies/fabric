@@ -11,9 +11,9 @@ required = [
 ignored = [
 ]
 
-noverify = [
-    "github.com/grpc-ecosystem/go-grpc-middleware"
-]
+# noverify = [
+#     "github.com/grpc-ecosystem/go-grpc-middleware"
+# ]
 
 [[constraint]]
   name = "github.com/Knetic/govaluate"
@@ -43,19 +43,19 @@ noverify = [
 
 [[constraint]]
   name = "k8s.io/api"
-  version = "kubernetes-1.11.0"
+  version = "kubernetes-1.16.0"
 
 [[constraint]]
   name = "k8s.io/apimachinery"
-  version = "kubernetes-1.11.0"
+  version = "kubernetes-1.16.0"
 
 [[constraint]]
   name = "k8s.io/client-go"
-  version = "~8.0.0"
+  version = "kubernetes-1.16.0"
 
-[[constraint]]
-  branch = "master"
-  name = "github.com/golang/groupcache"
+# [[constraint]]
+#   branch = "master"
+#   name = "github.com/golang/groupcache"
 
 [[constraint]]
   name = "github.com/golang/protobuf"
